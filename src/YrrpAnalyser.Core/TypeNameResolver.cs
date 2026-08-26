@@ -18,6 +18,14 @@ public sealed class TypeNameResolver
     private readonly Dictionary<AbstractType, List<string>> _lists = [];
     private readonly List<string> _countries = [];
 
+    /// <summary>
+    /// Type ID to the English display name off its own section's Name key - SENGINEER is
+    /// "Soviet Engineer". UIName is deliberately not used: it is a CSF label reference
+    /// (Name:ENGINEER), which needs the string table to mean anything, and resolves to the
+    /// shared "Engineer" rather than to the side-specific name.
+    /// </summary>
+    private readonly Dictionary<string, string> _displayNames = new(StringComparer.OrdinalIgnoreCase);
+
     public bool HasData => _lists.Count > 0;
     public string SourceDescription { get; private set; } = "none loaded";
 
@@ -84,6 +92,16 @@ public sealed class TypeNameResolver
             }
         }
 
+        // Every type's own section carries its display name. Walking the sections once is far
+        // cheaper than searching for each ID, and picking up a Name from a section that is not a
+        // type is harmless: nothing is ever looked up unless it appears in a type list above.
+        foreach (var section in ini.Sections)
+        {
+            var displayName = section.GetString("Name");
+            if (displayName.Length > 0)
+                _displayNames[section.Name] = displayName;
+        }
+
         var countries = ini.GetSection("Countries");
         if (countries is not null)
         {
@@ -109,13 +127,25 @@ public sealed class TypeNameResolver
         _ => type,
     };
 
+    /// <summary>
+    /// The name for a type array position: "Soviet Engineer [SENGINEER]" where rules are loaded,
+    /// the bare ID where the type has no Name of its own, and the array position itself where
+    /// there are no rules to resolve against.
+    /// </summary>
     public string Describe(AbstractType rtti, int heapId)
     {
         var kind = Normalise(rtti);
-        if (_lists.TryGetValue(kind, out var list) && heapId >= 0 && heapId < list.Count)
-            return list[heapId];
+        if (!_lists.TryGetValue(kind, out var list) || heapId < 0 || heapId >= list.Count)
+            return $"{kind}#{heapId}";
 
-        return $"{kind}#{heapId}";
+        var id = list[heapId];
+        if (_displayNames.TryGetValue(id, out var displayName)
+            && !string.Equals(displayName, id, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{displayName} [{id}]";
+        }
+
+        return id;
     }
 
     public string CountryName(int index)

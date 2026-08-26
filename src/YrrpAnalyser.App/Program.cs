@@ -9,6 +9,7 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.AddMessageFilter(new WheelRouter());
 
         var form = new MainForm();
         if (args.Length > 0 && File.Exists(args[0]))

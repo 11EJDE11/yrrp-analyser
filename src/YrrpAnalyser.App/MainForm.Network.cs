@@ -18,6 +18,7 @@ internal sealed partial class MainForm
 
         _networkFlow.Controls.Add(SectionHeading("Connection"));
         _networkFlow.Controls.Add(BuildNetworkSummary(network));
+        _networkFlow.Controls.Add(ChartHint());
 
         _networkFlow.Controls.Add(Chart(
             "Round trip time — each peer's own measurement, from ResponseTime2",
@@ -118,6 +119,15 @@ internal sealed partial class MainForm
         FitWidths(_networkFlow);
         _networkFlow.ResumeLayout();
     }
+
+    /// <summary>Nothing about the wheel or the drag is discoverable, so it is written down.</summary>
+    internal static Label ChartHint() => new()
+    {
+        Text = "Drag a chart to pan, Ctrl+scroll to zoom, double-click to reset. They share one time axis, so moving any of them moves them all.",
+        ForeColor = Theme.Muted,
+        AutoSize = true,
+        Margin = new Padding(0, 0, 0, 8),
+    };
 
     private Control Chart(string title, string suffix, int fps, IEnumerable<ChartSeries> series,
         IEnumerable<ChartMarker>? markers = null, double minimumY = 1)

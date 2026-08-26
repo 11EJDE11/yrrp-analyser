@@ -439,17 +439,32 @@ internal sealed class TimeSeriesChart : Control
 
     protected override void OnMouseWheel(MouseEventArgs e)
     {
-        base.OnMouseWheel(e);
-        var plot = PlotArea;
-        if (!plot.Contains(e.Location)) return;
+        // These charts sit in a tall scrolling column, so a plain wheel belongs to the page. A
+        // chart that zoomed on it would trap the scroll the moment the pointer crossed one, and
+        // leave no way back out once the column had nothing left to scroll. Ctrl is the modifier
+        // everything else uses for zoom, so it is the one used here.
+        //
+        // Leaving a plain wheel unhandled is what scrolls the page: WinForms passes an unhandled
+        // wheel on to the parent, which reaches the scrolling column and moves it by the system's
+        // own step. Doing that by hand here would scroll it twice over.
+        if ((ModifierKeys & Keys.Control) == 0)
+            return;
 
-        int anchor = XToFrame(e.X);
+        var plot = PlotArea;
+
+        // Zoom about the pointer when it is over the plot, and about the middle when it is over
+        // the title or the legend, so a wheel anywhere on the chart still does something sensible.
+        int anchor = XToFrame(plot.Contains(e.Location) ? e.X : plot.Left + plot.Width / 2);
         double factor = e.Delta > 0 ? 0.75 : 1 / 0.75;
         int span = (int)Math.Max(SimulationFps, (_viewMaxFrame - _viewMinFrame) * factor);
         double leftShare = (anchor - _viewMinFrame) / (double)Math.Max(1, _viewMaxFrame - _viewMinFrame);
 
         int min = (int)(anchor - span * leftShare);
         SetViewRange(min, min + span);
+
+        // And stop it here. An unhandled wheel is passed on to the parent, so without this the
+        // zoom would scroll the column at the same time.
+        if (e is HandledMouseEventArgs handled) handled.Handled = true;
     }
 
     private static string FormatValue(double v)

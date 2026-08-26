@@ -77,9 +77,10 @@ public sealed class EventDescriber(TypeNameResolver types)
 
             case EventType.SpecialPlace:
             {
+                // ID indexes SuperWeaponTypes, so it resolves through the same list as production.
                 int id = e.I32(0);
                 var cell = e.Cell(4);
-                return $"superweapon #{id} at {cell}";
+                return $"{_types.Describe(AbstractType.SuperWeaponType, id)} at {cell}";
             }
 
             case EventType.SellCell:

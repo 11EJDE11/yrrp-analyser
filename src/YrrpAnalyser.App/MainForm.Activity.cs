@@ -32,6 +32,7 @@ internal sealed partial class MainForm
             Height = 34,
             Margin = new Padding(0, 0, 0, 4),
         });
+        _activityFlow.Controls.Add(ChartHint());
 
         _activityFlow.Controls.Add(ActivityChart(
             $"Commands per minute, in {bucketSeconds:0}-second buckets",
