@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/YrrpAnalyser.App/YrrpAnalyser.App.csproj" />
+    <Project Path="src/YrrpAnalyser.Cli/YrrpAnalyser.Cli.csproj" />
+    <Project Path="src/YrrpAnalyser.Core/YrrpAnalyser.Core.csproj" />
+  </Folder>
+</Solution>

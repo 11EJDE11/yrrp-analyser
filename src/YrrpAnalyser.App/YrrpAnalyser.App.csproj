@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>YrrpAnalyser.App</RootNamespace>
+    <AssemblyName>YrrpAnalyser</AssemblyName>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\YrrpAnalyser.Core\YrrpAnalyser.Core.csproj" />
+  </ItemGroup>
+</Project>
