@@ -13,6 +13,7 @@ public static class ReplayFormat
 
     public const int HeaderSize = 1452;             // sizeof(ReplayHeader)
     public const int FrameRecordHeaderSize = 12;
+    public const int FrameObjectCensusSize = 8;
     public const int SideChannelRecordSize = 329;
     public const int EventSize = 111;               // sizeof(EventClass)
     public const int EventDataOffset = 7;           // offsetof(EventClass, DataBuffer)
@@ -87,7 +88,18 @@ public enum FrameRecordFlags : uint
     GameCrc = 1u << 3,
     Extensions = 1u << 4,
 
-    Known = TacticalPos | Selection | SideChannel | GameCrc | Extensions,
+    /// <summary>A FrameObjectCensus follows: how many objects exist and the next unique ID.</summary>
+    ObjectCensus = 1u << 5,
+
+    /// <summary>
+    /// An int32 game speed index follows. Written only on the frames the speed changes, which is
+    /// almost never - and a single player game changes it with no event at all, so the stream is
+    /// the only place a reader can learn about it.
+    /// </summary>
+    GameSpeed = 1u << 6,
+
+    Known = TacticalPos | Selection | SideChannel | GameCrc | Extensions
+            | ObjectCensus | GameSpeed,
 }
 
 public enum SideChannelEventType : byte

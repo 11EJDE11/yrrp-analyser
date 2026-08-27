@@ -17,6 +17,25 @@ public sealed class DesyncCompareResult
 
     public int ComparedFrames { get; set; }
     public int FirstDivergenceFrame { get; set; } = -1;
+
+    /// <summary>
+    /// First frame the two recordings held a different set of objects. Where both sides recorded
+    /// a census this usually lands before the hash does, because an object created or destroyed
+    /// on one side only moves the count on the frame it happens while the hash can stay clean for
+    /// thousands of frames afterwards.
+    /// </summary>
+    public int FirstCensusDivergenceFrame { get; set; } = -1;
+
+    public FrameObjectCensus LeftCensusAtDivergence { get; set; }
+    public FrameObjectCensus RightCensusAtDivergence { get; set; }
+    public int ComparedCensusFrames { get; set; }
+
+    /// <summary>
+    /// How many of the compared censuses differ. Whether a difference persists or clears up on
+    /// the next frame is the difference between the two runs having actually come apart and
+    /// something existing for a moment on one side only.
+    /// </summary>
+    public int CensusDivergentFrames { get; set; }
     public List<CrcDivergence> Divergences { get; } = [];
     public int TotalDivergentFrames { get; set; }
 
@@ -54,6 +73,8 @@ public static class DesyncCompare
         };
         result.Mismatches.AddRange(mismatches);
 
+        CompareCensus(left, right, result);
+
         var leftCrc = BuildCrcMap(left);
         var rightCrc = BuildCrcMap(right);
 
@@ -81,10 +102,18 @@ public static class DesyncCompare
         foreach (var frame in rightCrc.Keys)
             if (!leftCrc.ContainsKey(frame)) result.RightOnlyFrames++;
 
-        if (result.FirstDivergenceFrame >= 0)
+        // Context is gathered around whichever signal fired first: on a recording that carries a
+        // census, that is the earlier and more specific of the two.
+        int contextFrame = result.FirstCensusDivergenceFrame >= 0
+            && (result.FirstDivergenceFrame < 0
+                || result.FirstCensusDivergenceFrame < result.FirstDivergenceFrame)
+            ? result.FirstCensusDivergenceFrame
+            : result.FirstDivergenceFrame;
+
+        if (contextFrame >= 0)
         {
-            CollectContext(left, result.FirstDivergenceFrame, describer, result.LeftContext);
-            CollectContext(right, result.FirstDivergenceFrame, describer, result.RightContext);
+            CollectContext(left, contextFrame, describer, result.LeftContext);
+            CollectContext(right, contextFrame, describer, result.RightContext);
         }
 
         return result;
@@ -154,6 +183,32 @@ public static class DesyncCompare
     }
 
     private static string Short(string hash) => hash.Length > 8 ? hash[..8] : hash;
+
+    private static void CompareCensus(ReplayDocument left, ReplayDocument right,
+        DesyncCompareResult result)
+    {
+        var rightCensus = new Dictionary<int, FrameObjectCensus>();
+        foreach (var frame in right.Frames)
+            if (frame.Census is { } census) rightCensus[frame.FrameNumber] = census;
+
+        if (rightCensus.Count == 0) return;
+
+        foreach (var frame in left.Frames)
+        {
+            if (frame.Census is not { } mine) continue;
+            if (!rightCensus.TryGetValue(frame.FrameNumber, out var theirs)) continue;
+
+            result.ComparedCensusFrames++;
+            if (mine == theirs) continue;
+
+            result.CensusDivergentFrames++;
+            if (result.FirstCensusDivergenceFrame >= 0) continue;
+
+            result.FirstCensusDivergenceFrame = frame.FrameNumber;
+            result.LeftCensusAtDivergence = mine;
+            result.RightCensusAtDivergence = theirs;
+        }
+    }
 
     private static SortedDictionary<int, uint> BuildCrcMap(ReplayDocument doc)
     {

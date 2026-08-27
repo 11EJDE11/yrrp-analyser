@@ -8,7 +8,16 @@ internal sealed partial class MainForm
     private void PopulateIniTabs(ReplayDocument doc)
     {
         _spawnIniBox.Text = Normalise(doc.SpawnIniText);
-        _spawnMapBox.Text = Normalise(doc.SpawnMapText);
+        // A campaign recording names a scenario inside the game's own mixes rather than shipping
+        // a map, so there is deliberately nothing here to show.
+        _spawnMapBox.Text = doc.HasEmbeddedMap
+            ? Normalise(doc.SpawnMapText)
+            : Normalise("""
+                This recording does not embed a map.
+
+                The scenario it names lives inside the game's own mixes, so there is no
+                spawnmap.ini to carry. That is the normal shape of a campaign recording.
+                """);
     }
 
     /// <summary>A multiline TextBox only breaks on CRLF, and these files may be LF-only.</summary>
@@ -46,6 +55,8 @@ internal sealed partial class MainForm
                       $" / {doc.LastRecordedFrame:N0}");
         sb.AppendLine($"  header TotalFrames  {doc.Header.TotalFrames:N0}");
         sb.AppendLine($"  events              {doc.EventCount:N0}");
+        sb.AppendLine($"  object censuses     {doc.CensusFrameCount:N0}");
+        sb.AppendLine($"  game speed changes  {doc.GameSpeed.Changes.Count():N0}");
         sb.AppendLine($"  bytes per frame     {(doc.Frames.Count > 0 ? doc.InflatedStreamBytes / (double)doc.Frames.Count : 0):0.0} " +
                       "uncompressed");
         sb.AppendLine();
@@ -56,6 +67,9 @@ internal sealed partial class MainForm
             .ToList();
 
         sb.AppendLine("RECORD FLAG COMBINATIONS");
+        sb.AppendLine("  Blocks are stored bare and in write order: TacticalPos, Selection, SideChannel,");
+        sb.AppendLine("  GameCRC, ObjectCensus, GameSpeed, then Extensions last - which is not the");
+        sb.AppendLine("  numeric order of the flag bits.");
         foreach (var group in flagCounts)
             sb.AppendLine($"  0x{group.Key:X2}  {DescribeFlags(group.Key),-52} {group.Count(),8:N0}");
         sb.AppendLine();
@@ -95,6 +109,16 @@ internal sealed partial class MainForm
         sb.AppendLine("  " + string.Join(" ", doc.Header.RandomizerTable.Take(16).Select(v => v.ToString("X8"))));
         sb.AppendLine();
 
+        sb.AppendLine("GAME SPEED");
+        sb.AppendLine("  The header carries the speed the game started at; a change is written into the");
+        sb.AppendLine("  stream on the frame it happens. Durations integrate across the segments.");
+        foreach (var segment in doc.GameSpeed.Segments)
+        {
+            sb.AppendLine($"  from frame {segment.StartFrame,8:N0}  index {segment.SpeedIndex}  " +
+                          $"{segment.Fps,3} FPS  (at {ReplayDocument.FormatTime(TimeSpan.FromSeconds(segment.StartSeconds))})");
+        }
+        sb.AppendLine();
+
         sb.AppendLine("HOUSE INDEX MAP");
         sb.AppendLine("  Derived by reproducing Assign_Houses: human nodes sorted by player colour,");
         sb.AppendLine("  ties to the earlier spawn.ini slot, then AI houses in slot order.");
@@ -121,6 +145,8 @@ internal sealed partial class MainForm
         if ((flags & (uint)FrameRecordFlags.Selection) != 0) parts.Add("Selection");
         if ((flags & (uint)FrameRecordFlags.SideChannel) != 0) parts.Add("SideChannel");
         if ((flags & (uint)FrameRecordFlags.GameCrc) != 0) parts.Add("GameCRC");
+        if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0) parts.Add("ObjectCensus");
+        if ((flags & (uint)FrameRecordFlags.GameSpeed) != 0) parts.Add("GameSpeed");
         if ((flags & (uint)FrameRecordFlags.Extensions) != 0) parts.Add("Extensions");
         uint unknown = flags & ~(uint)FrameRecordFlags.Known;
         if (unknown != 0) parts.Add($"unknown 0x{unknown:X}");

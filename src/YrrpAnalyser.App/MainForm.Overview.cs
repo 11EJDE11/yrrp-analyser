@@ -50,7 +50,10 @@ internal sealed partial class MainForm
             ("Frames", $"{doc.EffectiveFrameCount:N0}" +
                        (doc.Header.TotalFrames == 0 ? "  (header not stamped; taken from the stream)" : "")),
             ("Duration", ReplayDocument.FormatTime(doc.Duration)),
-            ("Game speed", $"index {doc.Header.RecordedGameSpeed} — {doc.Header.SimulationFps} FPS"),
+            ("Game speed", doc.GameSpeed.SpeedChanged
+                ? $"index {doc.Header.RecordedGameSpeed} — {doc.Header.SimulationFps} FPS, " +
+                  $"then {doc.GameSpeed.Changes.Count()} change(s)"
+                : $"index {doc.Header.RecordedGameSpeed} — {doc.Header.SimulationFps} FPS"),
             ("Seed", doc.Header.Seed.ToString()),
             ("Unique ID counter", doc.Header.UniqueIDCounter.ToString()),
             ("Random next", $"{doc.Header.RandomNext1} / {doc.Header.RandomNext2}"),
@@ -111,6 +114,12 @@ internal sealed partial class MainForm
             ("Frames with a state hash", $"{doc.Frames.Count(f => f.GameCrc.HasValue):N0}"),
             ("Camera moves recorded", $"{doc.Frames.Count(f => f.TacticalPos.HasValue):N0}"),
             ("Selection changes", $"{doc.Frames.Count(f => f.SelectionIds is not null):N0}"),
+            ("Object censuses", doc.CensusFrameCount > 0
+                ? $"{doc.CensusFrameCount:N0}"
+                : "none (recorded before the census was added)"),
+            ("Embedded map", doc.HasEmbeddedMap
+                ? $"spawnmap.ini, {doc.Header.SpawnMapSize:N0} bytes"
+                : "not embedded — the scenario lives in the game's own mixes"),
             ("Extension blocks", doc.HasExtensionBlocks ? "present" : "none (nothing writes one yet)"),
             ("Type names", _types.HasData
                 ? $"resolved from {_types.SourceDescription}"

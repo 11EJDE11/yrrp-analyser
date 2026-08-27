@@ -58,8 +58,11 @@ internal sealed class CompareForm : Form
 
         if (result.FirstDivergenceFrame < 0 && result.ComparedFrames > 0)
         {
-            verdict = $"In step. All {result.ComparedFrames:N0} shared frames hash identically.";
-            verdictColor = Theme.Good;
+            verdict = result.FirstCensusDivergenceFrame < 0
+                ? $"In step. All {result.ComparedFrames:N0} shared frames hash identically."
+                : $"Hashes match, but the object sets diverge at frame " +
+                  $"{result.FirstCensusDivergenceFrame:N0}.";
+            verdictColor = result.FirstCensusDivergenceFrame < 0 ? Theme.Good : Theme.Warning;
         }
         else if (result.ComparedFrames == 0)
         {
@@ -82,6 +85,31 @@ internal sealed class CompareForm : Form
             AutoSize = true,
             Margin = new Padding(0, 0, 0, 6),
         });
+
+        // The census is the sharper of the two signals where both files carry one: an object
+        // created or destroyed on one side only moves the count on the frame it happens, where
+        // the hash can stay clean for thousands of frames afterwards.
+        if (result.ComparedCensusFrames > 0)
+        {
+            panel.Controls.Add(new Label
+            {
+                Text = result.FirstCensusDivergenceFrame < 0
+                    ? $"Object sets match across all {result.ComparedCensusFrames:N0} shared censuses."
+                    : $"Object sets differ from frame {result.FirstCensusDivergenceFrame:N0} " +
+                      $"({left.TimeLabel(result.FirstCensusDivergenceFrame)}) — " +
+                      $"{result.LeftCensusAtDivergence.AbstractCount:N0} objects / next ID " +
+                      $"{result.LeftCensusAtDivergence.ScenarioUniqueId:N0}  vs  " +
+                      $"{result.RightCensusAtDivergence.AbstractCount:N0} / " +
+                      $"{result.RightCensusAtDivergence.ScenarioUniqueId:N0}. Something was created " +
+                      $"or destroyed on one side only; {result.CensusDivergentFrames:N0} of " +
+                      $"{result.ComparedCensusFrames:N0} censuses differ.",
+                Font = Theme.UiBold,
+                ForeColor = result.FirstCensusDivergenceFrame < 0 ? Theme.Good : Theme.Danger,
+                AutoSize = true,
+                MaximumSize = new Size(1040, 0),
+                Margin = new Padding(0, 0, 0, 8),
+            });
+        }
 
         panel.Controls.Add(new Label
         {
@@ -128,6 +156,7 @@ internal sealed class CompareForm : Form
         {
             Title = "Frames where the two recordings hash differently",
             SimulationFps = left.Header.SimulationFps,
+            TimeLabeller = left.TimeLabel,
             Dock = DockStyle.Fill,
             MinimumYRange = 1,
             Margin = new Padding(0, 0, 0, 10),

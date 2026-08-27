@@ -32,6 +32,14 @@ public sealed class ReplayDocument
 
     public List<string> Warnings { get; } = [];
 
+    /// <summary>Speed the simulation ran at over time; one segment unless someone moved the slider.</summary>
+    public GameSpeedTrack GameSpeed { get; set; } = new();
+
+    /// <summary>False for a campaign recording, which names a scenario inside the game's own mixes.</summary>
+    public bool HasEmbeddedMap => Header.SpawnMapSize > 0;
+
+    public int CensusFrameCount { get; set; }
+
     public string FileName => Path.GetFileName(FilePath);
 
     public int EventCount => EventBlob.Length / ReplayFormat.EventSize;
@@ -46,8 +54,7 @@ public sealed class ReplayDocument
     public int EffectiveFrameCount =>
         Header.TotalFrames > 0 ? (int)Header.TotalFrames : LastRecordedFrame;
 
-    public TimeSpan Duration =>
-        TimeSpan.FromSeconds((double)EffectiveFrameCount / Math.Max(1, Header.SimulationFps));
+    public TimeSpan Duration => TimeSpan.FromSeconds(GameSpeed.SecondsAt(EffectiveFrameCount));
 
     public double CompressionRatio =>
         CompressedStreamBytes > 0 ? (double)InflatedStreamBytes / CompressedStreamBytes : 0;
@@ -74,9 +81,10 @@ public sealed class ReplayDocument
         }
     }
 
-    /// <summary>Frame number to elapsed game time, at the speed the simulation was pinned to.</summary>
-    public TimeSpan FrameToTime(int frame) =>
-        TimeSpan.FromSeconds((double)frame / Math.Max(1, Header.SimulationFps));
+    /// <summary>
+    /// Frame number to elapsed game time, across whatever speeds the recording actually ran at.
+    /// </summary>
+    public TimeSpan FrameToTime(int frame) => TimeSpan.FromSeconds(GameSpeed.SecondsAt(frame));
 
     public static string FormatTime(TimeSpan t) =>
         t.TotalHours >= 1

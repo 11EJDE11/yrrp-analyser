@@ -3,7 +3,8 @@
 Reads `.yrrp` replays — the recording format written by the CnCNet [yrpp-spawner](https://github.com/CnCNet/yrpp-spawner)
 for Red Alert 2: Yuri's Revenge. It does not play them; it opens one and shows what is actually
 inside: who played, what they did, how their connections behaved, and — given both peers'
-recordings of one match — the exact frame a desync started on.
+recordings of one match — the exact frame a desync started on, from either the per-frame state
+hash or the object census, whichever moved first.
 
 ```
 dotnet build
@@ -61,8 +62,8 @@ Both embedded files, searchable and exportable. IPs are already blanked by the r
 
 ## Diagnostics
 
-Parse results, record-flag histogram, frame-sequence checks, every header field, and the derived
-house-index map.
+Parse results, record-flag histogram, frame-sequence checks, every header field, the game-speed
+segments, and the derived house-index map.
 
 ![Diagnostics](docs/diagnostics.png)
 

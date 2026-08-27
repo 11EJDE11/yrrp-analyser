@@ -81,13 +81,16 @@ public static class Exporters
     public static void WriteFrameCrcCsv(string path, ReplayDocument doc)
     {
         using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
-        writer.WriteLine("Frame,Time,GameCRC,Events,Flags");
+        writer.WriteLine("Frame,Time,GameCRC,ObjectCount,NextUniqueID,GameSpeed,Events,Flags");
         foreach (var f in doc.Frames)
         {
             writer.WriteLine(string.Join(',',
                 f.FrameNumber,
                 Csv(doc.TimeLabel(f.FrameNumber)),
                 f.GameCrc is { } crc ? crc.ToString("X8") : "",
+                f.Census is { } census ? census.AbstractCount.ToString() : "",
+                f.Census is { } ids ? ids.ScenarioUniqueId.ToString() : "",
+                f.GameSpeed is { } speed ? speed.ToString() : "",
                 f.EventCount,
                 $"0x{f.Flags:X2}"));
         }
@@ -115,7 +118,15 @@ public static class Exporters
                 recordedAtUtc = doc.Header.RecordedAt.UtcDateTime,
                 totalFrames = doc.Header.TotalFrames,
                 cleanShutdown = doc.Header.CleanShutdown,
+                hasEmbeddedMap = doc.HasEmbeddedMap,
             },
+            gameSpeed = doc.GameSpeed.Segments.Select(seg => new
+            {
+                startFrame = seg.StartFrame,
+                speedIndex = seg.SpeedIndex,
+                fps = seg.Fps,
+                startSeconds = Math.Round(seg.StartSeconds, 2),
+            }),
             stream = new
             {
                 frameRecords = doc.Frames.Count,
@@ -125,6 +136,7 @@ public static class Exporters
                 compressedBytes = doc.CompressedStreamBytes,
                 inflatedBytes = doc.InflatedStreamBytes,
                 compressionRatio = Math.Round(doc.CompressionRatio, 2),
+                objectCensuses = doc.CensusFrameCount,
                 sawEndOfStream = doc.SawEndOfStream,
                 truncated = doc.Truncated,
                 warnings = doc.Warnings,

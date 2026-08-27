@@ -65,10 +65,15 @@ static int Report(string[] args)
     Console.WriteLine($"Mode            {doc.Header.GameModeName}   seed {doc.Header.Seed}   " +
                       $"speed index {doc.Header.RecordedGameSpeed} ({doc.Header.SimulationFps} FPS)");
     Console.WriteLine($"Length          {doc.EffectiveFrameCount:N0} frames, " +
-                      $"{ReplayDocument.FormatTime(doc.Duration)}");
+                      $"{ReplayDocument.FormatTime(doc.Duration)}" +
+                      (doc.GameSpeed.SpeedChanged
+                          ? $"   (speed changed {doc.GameSpeed.Changes.Count()}x)"
+                          : ""));
     Console.WriteLine($"Shutdown        {(doc.Header.CleanShutdown ? "clean" : "NOT CLEAN - recording cut short")}");
     Console.WriteLine($"Stream          {doc.Frames.Count:N0} frame records, {doc.EventCount:N0} events, " +
-                      $"{doc.CompressionRatio:0.0}x compression");
+                      $"{doc.CensusFrameCount:N0} censuses, {doc.CompressionRatio:0.0}x compression");
+    if (!doc.HasEmbeddedMap)
+        Console.WriteLine("Map             not embedded - the scenario lives in the game's own mixes");
 
     foreach (var warning in doc.Warnings)
         Console.WriteLine($"  ! {warning}");
@@ -163,10 +168,28 @@ static int Compare(string leftPath, string rightPath)
     Console.WriteLine($"Compared {result.ComparedFrames:N0} frames " +
                       $"({result.LeftOnlyFrames:N0} / {result.RightOnlyFrames:N0} present on one side only)");
 
+    if (result.ComparedCensusFrames > 0)
+    {
+        Console.WriteLine($"Compared {result.ComparedCensusFrames:N0} object censuses");
+        if (result.FirstCensusDivergenceFrame >= 0)
+        {
+            Console.WriteLine($"  object sets differ from frame {result.FirstCensusDivergenceFrame:N0} " +
+                              $"({left.TimeLabel(result.FirstCensusDivergenceFrame)}): " +
+                              $"{result.LeftCensusAtDivergence.AbstractCount} objects / next ID " +
+                              $"{result.LeftCensusAtDivergence.ScenarioUniqueId}  vs  " +
+                              $"{result.RightCensusAtDivergence.AbstractCount} / " +
+                              $"{result.RightCensusAtDivergence.ScenarioUniqueId}");
+            Console.WriteLine($"  {result.CensusDivergentFrames:N0} of them differ in total");
+        }
+    }
+
     if (result.FirstDivergenceFrame < 0)
     {
-        Console.WriteLine("Every compared frame hashes identically - the two simulations stayed in step.");
-        return 0;
+        Console.WriteLine(result.FirstCensusDivergenceFrame < 0
+            ? "Every compared frame hashes identically - the two simulations stayed in step."
+            : "Frame hashes all match, but the object sets do not - something exists on one side "
+              + "only without having moved the hash yet.");
+        return result.FirstCensusDivergenceFrame < 0 ? 0 : 1;
     }
 
     Console.WriteLine($"First divergence at frame {result.FirstDivergenceFrame:N0} " +

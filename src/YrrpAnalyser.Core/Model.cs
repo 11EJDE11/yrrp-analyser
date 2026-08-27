@@ -69,6 +69,14 @@ public sealed class SideChannelEvent
 }
 
 /// <summary>
+/// How many objects the simulation was holding, and the unique ID the next one would get. The
+/// spawner writes this every frame beside the state hash: an object created or destroyed on one
+/// side only shows up here on the frame it happens, where the hash can stay clean for thousands
+/// of frames afterwards.
+/// </summary>
+public readonly record struct FrameObjectCensus(int AbstractCount, int ScenarioUniqueId);
+
+/// <summary>
 /// One frame's record. Blocks are present only when the matching flag is set; the writer omits
 /// a block whose value has not changed since the last written frame.
 /// </summary>
@@ -80,6 +88,8 @@ public sealed class FrameRecord
     public uint[]? SelectionIds;
     public SideChannelEvent[]? SideChannel;
     public uint? GameCrc;
+    public FrameObjectCensus? Census;
+    public int? GameSpeed;
     public byte[]? Extension;
 
     /// <summary>Index of this frame's first event in <see cref="ReplayDocument.Events"/>.</summary>

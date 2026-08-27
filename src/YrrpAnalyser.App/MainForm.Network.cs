@@ -137,6 +137,7 @@ internal sealed partial class MainForm
             Title = title,
             ValueSuffix = suffix,
             SimulationFps = fps,
+            TimeLabeller = _doc is { } doc ? doc.TimeLabel : null,
             MinimumYRange = minimumY,
             Width = 980,
             Height = 210,

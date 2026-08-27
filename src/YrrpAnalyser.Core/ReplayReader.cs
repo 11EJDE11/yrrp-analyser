@@ -97,6 +97,8 @@ public static class ReplayReader
         file.Position = streamOffset;
         ReadFrameStream(file, doc, progress);
 
+        doc.GameSpeed = GameSpeedTrack.Build(doc.Header, doc.Frames);
+        doc.CensusFrameCount = doc.Frames.Count(f => f.Census.HasValue);
         doc.SpawnIni = IniDocument.Parse(doc.SpawnIniText);
         doc.SpawnMapIni = IniDocument.Parse(doc.SpawnMapText);
         doc.Roster = PlayerRoster.Build(doc.SpawnIni, doc.Header);
@@ -256,6 +258,26 @@ public static class ReplayReader
                 {
                     if (!reader.TryRead(4, out var cb)) { doc.Truncated = true; break; }
                     record.GameCrc = BinaryPrimitives.ReadUInt32LittleEndian(cb);
+                }
+
+                // Census and game speed are read here, ahead of the extension block, because that
+                // is the order the writer puts them in - not the numeric order of their flag bits.
+                // The extension block stays physically last on purpose: it is the only block that
+                // carries its own length, so anything written after it would be unreachable to a
+                // reader that stepped over it.
+                if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0)
+                {
+                    if (!reader.TryRead(ReplayFormat.FrameObjectCensusSize, out var nb))
+                    { doc.Truncated = true; break; }
+                    record.Census = new FrameObjectCensus(
+                        BinaryPrimitives.ReadInt32LittleEndian(nb),
+                        BinaryPrimitives.ReadInt32LittleEndian(nb[4..]));
+                }
+
+                if ((flags & (uint)FrameRecordFlags.GameSpeed) != 0)
+                {
+                    if (!reader.TryRead(4, out var sb)) { doc.Truncated = true; break; }
+                    record.GameSpeed = BinaryPrimitives.ReadInt32LittleEndian(sb);
                 }
 
                 if ((flags & (uint)FrameRecordFlags.Extensions) != 0)

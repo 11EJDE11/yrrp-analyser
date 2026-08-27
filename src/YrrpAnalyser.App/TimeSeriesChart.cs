@@ -47,7 +47,15 @@ internal sealed class TimeSeriesChart : Control
 
     public string Title { get; set; } = "";
     public string ValueSuffix { get; set; } = "";
+    /// <summary>Only used to choose a sensible gridline spacing; labels come from TimeLabeller.</summary>
     public int SimulationFps { get; set; } = 60;
+
+    /// <summary>
+    /// Turns a frame number into the label shown on the axis. Set from the document, because a
+    /// recording whose game speed changed part-way runs at more than one rate and cannot be
+    /// labelled by dividing by a single one.
+    /// </summary>
+    public Func<int, string>? TimeLabeller { get; set; }
 
     /// <summary>Force the Y axis to start at this value even when the data does not reach it.</summary>
     public double MinimumYRange { get; set; } = 1;
@@ -230,8 +238,7 @@ internal sealed class TimeSeriesChart : Control
             if (frame < _viewMinFrame) continue;
             float x = FrameToX(frame);
             g.DrawLine(gridPen, x, plot.Top, x, plot.Bottom);
-            string label = ReplayDocument.FormatTime(
-                TimeSpan.FromSeconds(frame / (double)Math.Max(1, SimulationFps)));
+            string label = LabelForFrame(frame);
             var size = g.MeasureString(label, Theme.MonoSmall);
             g.DrawString(label, Theme.MonoSmall, labelBrush, x - size.Width / 2, plot.Bottom + 4);
         }
@@ -336,8 +343,7 @@ internal sealed class TimeSeriesChart : Control
 
         var lines = new List<(string Text, Color Color)>
         {
-            ($"frame {frame:N0}  ({ReplayDocument.FormatTime(TimeSpan.FromSeconds(frame / (double)Math.Max(1, SimulationFps)))})",
-                Theme.Text),
+            ($"frame {frame:N0}  ({LabelForFrame(frame)})", Theme.Text),
         };
 
         foreach (var s in _series)
@@ -374,6 +380,10 @@ internal sealed class TimeSeriesChart : Control
             ty += g.MeasureString(text, Theme.MonoSmall).Height;
         }
     }
+
+    private string LabelForFrame(int frame) => TimeLabeller is { } label
+        ? label(frame)
+        : ReplayDocument.FormatTime(TimeSpan.FromSeconds(frame / (double)Math.Max(1, SimulationFps)));
 
     private static Sample? NearestSample(ChartSeries s, int frame)
     {
