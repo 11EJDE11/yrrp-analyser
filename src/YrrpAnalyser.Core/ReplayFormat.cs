@@ -7,7 +7,7 @@ namespace YrrpAnalyser;
 /// </summary>
 public static class ReplayFormat
 {
-    public const uint Magic = 0x4A455259u;          // 'YREJ'
+    public const uint Magic = 0x50525259;          // 'YRRP'
     public const uint Version = 1;
     public const uint MinSupportedVersion = 1;
 
