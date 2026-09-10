@@ -4,4 +4,7 @@
     <Project Path="src/YrrpAnalyser.Cli/YrrpAnalyser.Cli.csproj" />
     <Project Path="src/YrrpAnalyser.Core/YrrpAnalyser.Core.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/YrrpAnalyser.CompatibilityTests/YrrpAnalyser.CompatibilityTests.csproj" />
+  </Folder>
 </Solution>

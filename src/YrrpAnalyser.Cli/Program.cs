@@ -59,9 +59,9 @@ static int Report(string[] args)
     var activity = ActivityAnalysis.Build(doc, describer);
 
     Console.WriteLine($"File            {doc.FileName}  ({doc.FileSize:N0} bytes)");
-    Console.WriteLine($"Map             {doc.Header.MapName}");
+    Console.WriteLine($"Map             {doc.MapName}");
     Console.WriteLine($"Recorded        {doc.Header.RecordedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}");
-    Console.WriteLine($"Spawner         {doc.Header.SpawnerVersion}   client {doc.Header.GameClientVersion}");
+    Console.WriteLine($"Game package    {doc.GamePackageVersion}");
     Console.WriteLine($"Mode            {doc.Header.GameModeName}   seed {doc.Header.Seed}   " +
                       $"speed index {doc.Header.RecordedGameSpeed} ({doc.Header.SimulationFps} FPS)");
     Console.WriteLine($"Length          {doc.EffectiveFrameCount:N0} frames, " +

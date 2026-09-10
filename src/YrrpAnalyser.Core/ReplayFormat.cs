@@ -11,9 +11,10 @@ public static class ReplayFormat
     public const uint Version = 1;
     public const uint MinSupportedVersion = 1;
 
-    public const int HeaderSize = 1452;             // sizeof(ReplayHeader)
+    public const int HeaderSize = 1124;             // sizeof(ReplayHeader)
     public const int FrameRecordHeaderSize = 12;
     public const int FrameObjectCensusSize = 8;
+    public const int FrameRandomStateSize = 8;
     public const int SideChannelRecordSize = 329;
     public const int EventSize = 111;               // sizeof(EventClass)
     public const int EventDataOffset = 7;           // offsetof(EventClass, DataBuffer)
@@ -26,6 +27,9 @@ public static class ReplayFormat
     public const int MaxBeaconSlots = 3;
     public const uint MaxFrameExtensionBytes = 1u << 20;
     public const int MaxSelectionCount = 4096;
+    public const int MaxSelectionTriggersPerFrame = 4096;
+    public const int MaxEventsPerFrame = 128 * 128;
+    public const uint MaxEmbeddedFileBytes = 32u * 1024u * 1024u;
 
     /// <summary>The spawner sync-flushes the deflate stream this often, bounding crash loss.</summary>
     public const int SyncFlushFrameInterval = 60;
@@ -35,27 +39,21 @@ public static class ReplayFormat
     public const int OffsetMagic = 0;
     public const int OffsetVersion = 4;
     public const int OffsetHeaderSize = 8;
-    public const int OffsetMapName = 12;
-    public const int OffsetSpawnerVersion = 272;
-    public const int OffsetGameClientVersion = 276;
-    public const int OffsetGameMode = 340;
-    public const int OffsetUniqueIDCounter = 344;
-    public const int OffsetSeed = 348;
-    public const int OffsetRandomNext1 = 352;
-    public const int OffsetRandomNext2 = 356;
-    public const int OffsetRandomizerTable = 360;
+    public const int OffsetGameMode = 12;
+    public const int OffsetUniqueIDCounter = 16;
+    public const int OffsetSeed = 20;
+    public const int OffsetRandomNext1 = 24;
+    public const int OffsetRandomNext2 = 28;
+    public const int OffsetRandomizerTable = 32;
     public const int RandomizerTableLength = 250;
-    public const int OffsetSpawnIniSize = 1360;
-    public const int OffsetSpawnMapSize = 1364;
-    public const int OffsetRecordedGameSpeed = 1368;
-    public const int OffsetRecordedUnixTime = 1372;
-    public const int OffsetTotalFrames = 1380;
-    public const int OffsetFlags = 1384;
-    public const int OffsetReserved = 1388;
+    public const int OffsetSpawnIniSize = 1032;
+    public const int OffsetSpawnMapSize = 1036;
+    public const int OffsetRecordedGameSpeed = 1040;
+    public const int OffsetRecordedUnixTime = 1044;
+    public const int OffsetTotalFrames = 1052;
+    public const int OffsetFlags = 1056;
+    public const int OffsetReserved = 1060;
     public const int ReservedLength = 16;
-
-    public const int MapNameLength = 260;
-    public const int GameClientVersionLength = 64;
 
     /// <summary>
     /// Vanilla Queue_AI_Multiplayer mapping, duplicated in ReplayFormat.h and in the client's
@@ -98,8 +96,14 @@ public enum FrameRecordFlags : uint
     /// </summary>
     GameSpeed = 1u << 6,
 
+    /// <summary>Two int32 randomizer table cursors, preceding the game speed block.</summary>
+    RandomState = 1u << 7,
+
+    /// <summary>A positive int32 count followed by selection-trigger object unique IDs.</summary>
+    SelectionTriggers = 1u << 8,
+
     Known = TacticalPos | Selection | SideChannel | GameCrc | Extensions
-            | ObjectCensus | GameSpeed,
+            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers,
 }
 
 public enum SideChannelEventType : byte

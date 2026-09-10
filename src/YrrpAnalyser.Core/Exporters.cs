@@ -81,7 +81,7 @@ public static class Exporters
     public static void WriteFrameCrcCsv(string path, ReplayDocument doc)
     {
         using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
-        writer.WriteLine("Frame,Time,GameCRC,ObjectCount,NextUniqueID,GameSpeed,Events,Flags");
+        writer.WriteLine("Frame,Time,GameCRC,ObjectCount,NextUniqueID,GameSpeed,Events,Flags,RandomNext1,RandomNext2,SelectionTriggerIDs");
         foreach (var f in doc.Frames)
         {
             writer.WriteLine(string.Join(',',
@@ -92,7 +92,10 @@ public static class Exporters
                 f.Census is { } ids ? ids.ScenarioUniqueId.ToString() : "",
                 f.GameSpeed is { } speed ? speed.ToString() : "",
                 f.EventCount,
-                $"0x{f.Flags:X2}"));
+                $"0x{f.Flags:X2}",
+                f.RandomState is { } rng1 ? rng1.Next1.ToString() : "",
+                f.RandomState is { } rng2 ? rng2.Next2.ToString() : "",
+                Csv(f.SelectionTriggerIds is { } triggers ? string.Join(" ", triggers) : "")));
         }
     }
 
@@ -107,9 +110,6 @@ public static class Exporters
             {
                 version = doc.Header.Version,
                 headerSize = doc.Header.HeaderSize,
-                map = doc.Header.MapName,
-                spawnerVersion = doc.Header.SpawnerVersion,
-                gameClientVersion = doc.Header.GameClientVersion,
                 gameMode = doc.Header.GameModeName,
                 seed = doc.Header.Seed,
                 uniqueIdCounter = doc.Header.UniqueIDCounter,
@@ -119,6 +119,11 @@ public static class Exporters
                 totalFrames = doc.Header.TotalFrames,
                 cleanShutdown = doc.Header.CleanShutdown,
                 hasEmbeddedMap = doc.HasEmbeddedMap,
+            },
+            metadata = new
+            {
+                map = doc.MapName,
+                gamePackageVersion = doc.GamePackageVersion,
             },
             gameSpeed = doc.GameSpeed.Segments.Select(seg => new
             {
@@ -137,6 +142,8 @@ public static class Exporters
                 inflatedBytes = doc.InflatedStreamBytes,
                 compressionRatio = Math.Round(doc.CompressionRatio, 2),
                 objectCensuses = doc.CensusFrameCount,
+                randomStates = doc.Frames.Count(f => f.RandomState.HasValue),
+                selectionTriggers = doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)),
                 sawEndOfStream = doc.SawEndOfStream,
                 truncated = doc.Truncated,
                 warnings = doc.Warnings,

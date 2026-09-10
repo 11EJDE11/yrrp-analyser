@@ -131,8 +131,8 @@ public static class DesyncCompare
         if (gameIdA.Length > 0 && gameIdB.Length > 0 && gameIdA != gameIdB)
             mismatches.Add($"GameID differs: {gameIdA} vs {gameIdB}");
 
-        if (!string.Equals(a.Header.MapName, b.Header.MapName, StringComparison.Ordinal))
-            mismatches.Add($"Map differs: {a.Header.MapName} vs {b.Header.MapName}");
+        if (!string.Equals(a.MapName, b.MapName, StringComparison.Ordinal))
+            mismatches.Add($"Map differs: {a.MapName} vs {b.MapName}");
 
         string sha1A = a.SpawnIni.GetString("Settings", "MapSHA1");
         string sha1B = b.SpawnIni.GetString("Settings", "MapSHA1");

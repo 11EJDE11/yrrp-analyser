@@ -24,7 +24,7 @@ internal sealed partial class MainForm
 
         yield return new Label
         {
-            Text = doc.Header.MapName.Length > 0 ? doc.Header.MapName : "(map name not recorded)",
+            Text = doc.MapName.Length > 0 ? doc.MapName : "(map name not recorded)",
             Font = new Font("Segoe UI Semibold", 16f),
             ForeColor = Theme.Text,
             AutoSize = true,
@@ -58,8 +58,7 @@ internal sealed partial class MainForm
             ("Unique ID counter", doc.Header.UniqueIDCounter.ToString()),
             ("Random next", $"{doc.Header.RandomNext1} / {doc.Header.RandomNext2}"),
 
-            ("Spawner version", doc.Header.SpawnerVersion),
-            ("Game client", doc.Header.GameClientVersion),
+            ("Game package", doc.GamePackageVersion.Length > 0 ? doc.GamePackageVersion : "not recorded"),
             ("Replay format", $"version {doc.Header.Version}, header {doc.Header.HeaderSize} bytes"),
             ("Shutdown", doc.Header.CleanShutdown ? "clean" : "cut short — the game did not close the file"),
             ("File", $"{doc.FileSize:N0} bytes"),
@@ -75,8 +74,7 @@ internal sealed partial class MainForm
             ("Game mode", ini.GetString("Settings", "UIGameMode", "—")),
             ("Game ID", ini.GetString("Settings", "GameID", "—")),
             ("Protocol", $"{network.Protocol}  (FrameSendRate {network.ConfiguredFrameSendRate})"),
-            ("Tunnel", $"{ini.GetString("Tunnel", "Ip", "—")}:{ini.GetString("Tunnel", "Port", "—")}" +
-                       "   (address blanked by the recorder)"),
+            ("Tunnel", $"{ini.GetString("Tunnel", "Ip", "—")}:{ini.GetString("Tunnel", "Port", "—")}"),
 
             ("Starting credits", ini.GetString("Settings", "Credits", "—")),
             ("Unit count", ini.GetString("Settings", "UnitCount", "—")),
@@ -116,7 +114,9 @@ internal sealed partial class MainForm
             ("Selection changes", $"{doc.Frames.Count(f => f.SelectionIds is not null):N0}"),
             ("Object censuses", doc.CensusFrameCount > 0
                 ? $"{doc.CensusFrameCount:N0}"
-                : "none (recorded before the census was added)"),
+                : "none (not emitted by the current recorder)"),
+            ("RNG cursor snapshots", $"{doc.Frames.Count(f => f.RandomState.HasValue):N0}"),
+            ("Selection triggers", $"{doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)):N0}"),
             ("Embedded map", doc.HasEmbeddedMap
                 ? $"spawnmap.ini, {doc.Header.SpawnMapSize:N0} bytes"
                 : "not embedded — the scenario lives in the game's own mixes"),

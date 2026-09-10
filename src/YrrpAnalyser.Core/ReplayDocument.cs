@@ -14,6 +14,11 @@ public sealed class ReplayDocument
     public IniDocument SpawnMapIni { get; set; } = IniDocument.Empty;
     public PlayerRoster Roster { get; set; } = PlayerRoster.Empty;
 
+    // Display metadata lives in the embedded INIs, not the binary header.
+    public string MapName => SpawnIni.GetString("Settings", "UIMapName",
+        SpawnMapIni.GetString("Basic", "Name", SpawnIni.GetString("Settings", "Scenario")));
+    public string GamePackageVersion => SpawnIni.GetString("Settings", "GamePackageVersion");
+
     public List<FrameRecord> Frames { get; set; } = [];
 
     /// <summary>All recorded events, back to back, 111 bytes each.</summary>

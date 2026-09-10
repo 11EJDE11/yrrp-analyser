@@ -7,12 +7,6 @@ public sealed class ReplayHeaderInfo
     public uint Magic { get; init; }
     public uint Version { get; init; }
     public uint HeaderSize { get; init; }
-    public string MapName { get; init; } = "";
-    public byte SpawnerVersionMajor { get; init; }
-    public byte SpawnerVersionMinor { get; init; }
-    public byte SpawnerVersionRevision { get; init; }
-    public byte SpawnerVersionPatch { get; init; }
-    public string GameClientVersion { get; init; } = "";
     public uint GameMode { get; init; }
     public int UniqueIDCounter { get; init; }
     public int Seed { get; init; }
@@ -26,9 +20,6 @@ public sealed class ReplayHeaderInfo
     public uint TotalFrames { get; init; }
     public uint Flags { get; init; }
     public uint[] Reserved { get; init; } = [];
-
-    public string SpawnerVersion =>
-        $"{SpawnerVersionMajor}.{SpawnerVersionMinor}.{SpawnerVersionRevision}.{SpawnerVersionPatch}";
 
     public bool CleanShutdown => (Flags & (uint)ReplayHeaderFlags.CleanShutdown) != 0;
 
@@ -70,11 +61,13 @@ public sealed class SideChannelEvent
 
 /// <summary>
 /// How many objects the simulation was holding, and the unique ID the next one would get. The
-/// spawner writes this every frame beside the state hash: an object created or destroyed on one
+/// older spawner builds wrote this beside the state hash: an object created or destroyed on one
 /// side only shows up here on the frame it happens, where the hash can stay clean for thousands
 /// of frames afterwards.
 /// </summary>
 public readonly record struct FrameObjectCensus(int AbstractCount, int ScenarioUniqueId);
+
+public readonly record struct FrameRandomState(int Next1, int Next2);
 
 /// <summary>
 /// One frame's record. Blocks are present only when the matching flag is set; the writer omits
@@ -89,7 +82,9 @@ public sealed class FrameRecord
     public SideChannelEvent[]? SideChannel;
     public uint? GameCrc;
     public FrameObjectCensus? Census;
+    public FrameRandomState? RandomState;
     public int? GameSpeed;
+    public uint[]? SelectionTriggerIds;
     public byte[]? Extension;
 
     /// <summary>Index of this frame's first event in <see cref="ReplayDocument.Events"/>.</summary>

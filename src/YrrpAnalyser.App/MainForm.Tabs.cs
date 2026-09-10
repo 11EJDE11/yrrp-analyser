@@ -120,8 +120,8 @@ internal sealed partial class MainForm
         _tabs.TabPages.Add(NewPage("Network", Scrollable(_networkFlow)));
         _tabs.TabPages.Add(NewPage("Activity", Scrollable(_activityFlow)));
         _tabs.TabPages.Add(NewPage("spawn.ini", BuildIniTab(_spawnIniBox, _spawnIniSearch,
-            "The lobby exactly as the client wrote it, with every IP blanked to 0.0.0.0 by the " +
-            "recorder. Player names, sides, colours, game options and the client's file hashes are verbatim.")));
+            "The launch spawn.ini embedded verbatim by the recorder, including player names, " +
+            "sides, colours, game options and the client's file hashes.")));
         _tabs.TabPages.Add(NewPage("spawnmap.ini", BuildIniTab(_spawnMapBox, _spawnMapSearch,
             "The map the game actually loaded, embedded whole. This is the file the client has to " +
             "write back out before a replay will play.")));

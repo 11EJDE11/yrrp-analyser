@@ -56,7 +56,8 @@ an event breakdown by house.
 
 ## spawn.ini and spawnmap.ini
 
-Both embedded files, searchable and exportable. IPs are already blanked by the recorder.
+Both embedded files, searchable and exportable. The recorder embeds them verbatim; any address
+sanitization is the client's responsibility.
 
 ![spawnmap.ini](docs/spawnmap-ini.png)
 
@@ -73,3 +74,23 @@ segments, and the derived house-index map.
 way the CnCNet client's `ReplayGame.cs` does. There is no compile-time link, so a header change has
 to be made here too — a size or offset drift is silent, not an error. The spawner's
 `docs/replay-format.md` is the reference.
+
+The current reader matches the 1124-byte header and frame block order in spawner commit
+`fbf1e04` on `add-replays`. Map names and `GamePackageVersion` come from the embedded
+`spawn.ini`; DLL version bytes are no longer recorded. Earlier development headers (1452 or
+1128 bytes with metadata inserted before the simulation fields) are not supported. Format version
+1 was retained during those development changes.
+
+Frame blocks are read in this order: camera, selection, side channel, CRC, object census, RNG
+cursors, game speed, selection triggers, extensions, then gameplay events. Census and RNG blocks
+remain readable even though the current recorder no longer emits them. Frame CSV exports include
+RNG cursors and selection-trigger IDs; summary JSON keeps INI metadata in its own `metadata` object.
+
+Run the dependency-free binary compatibility checks with:
+
+```
+dotnet run --project tests/YrrpAnalyser.CompatibilityTests
+```
+
+Fixtures use explicit wire offsets and block flags independently of `ReplayFormat.cs`, including
+combined blocks, appended header bytes, empty/campaign recordings, and truncated or invalid records.

@@ -56,6 +56,8 @@ internal sealed partial class MainForm
         sb.AppendLine($"  header TotalFrames  {doc.Header.TotalFrames:N0}");
         sb.AppendLine($"  events              {doc.EventCount:N0}");
         sb.AppendLine($"  object censuses     {doc.CensusFrameCount:N0}");
+        sb.AppendLine($"  RNG cursor snapshots {doc.Frames.Count(f => f.RandomState.HasValue):N0}");
+        sb.AppendLine($"  selection triggers  {doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)):N0}");
         sb.AppendLine($"  game speed changes  {doc.GameSpeed.Changes.Count():N0}");
         sb.AppendLine($"  bytes per frame     {(doc.Frames.Count > 0 ? doc.InflatedStreamBytes / (double)doc.Frames.Count : 0):0.0} " +
                       "uncompressed");
@@ -68,8 +70,8 @@ internal sealed partial class MainForm
 
         sb.AppendLine("RECORD FLAG COMBINATIONS");
         sb.AppendLine("  Blocks are stored bare and in write order: TacticalPos, Selection, SideChannel,");
-        sb.AppendLine("  GameCRC, ObjectCensus, GameSpeed, then Extensions last - which is not the");
-        sb.AppendLine("  numeric order of the flag bits.");
+        sb.AppendLine("  GameCRC, ObjectCensus, RandomState, GameSpeed, SelectionTriggers, Extensions.");
+        sb.AppendLine("  Gameplay events follow those blocks; this is not numeric flag-bit order.");
         foreach (var group in flagCounts)
             sb.AppendLine($"  0x{group.Key:X2}  {DescribeFlags(group.Key),-52} {group.Count(),8:N0}");
         sb.AppendLine();
@@ -91,9 +93,6 @@ internal sealed partial class MainForm
         sb.AppendLine("HEADER FIELDS");
         sb.AppendLine($"  Magic               0x{doc.Header.Magic:X8}");
         sb.AppendLine($"  Version             {doc.Header.Version}");
-        sb.AppendLine($"  MapName             {doc.Header.MapName}");
-        sb.AppendLine($"  SpawnerVersion      {doc.Header.SpawnerVersion}");
-        sb.AppendLine($"  GameClientVersion   {doc.Header.GameClientVersion}");
         sb.AppendLine($"  GameMode            {doc.Header.GameMode} ({doc.Header.GameModeName})");
         sb.AppendLine($"  UniqueIDCounter     {doc.Header.UniqueIDCounter}");
         sb.AppendLine($"  Seed                {doc.Header.Seed}");
@@ -103,6 +102,11 @@ internal sealed partial class MainForm
                       $"({doc.Header.RecordedAt.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC)");
         sb.AppendLine($"  Flags               0x{doc.Header.Flags:X8}");
         sb.AppendLine($"  Reserved            {(doc.Header.HasUnknownReservedData ? "carries values this build does not know" : "all zero")}");
+        sb.AppendLine();
+
+        sb.AppendLine("EMBEDDED METADATA");
+        sb.AppendLine($"  Map name            {doc.MapName}");
+        sb.AppendLine($"  GamePackageVersion  {doc.GamePackageVersion}");
         sb.AppendLine();
 
         sb.AppendLine("RNG SNAPSHOT (first 16 of 250)");
@@ -146,7 +150,9 @@ internal sealed partial class MainForm
         if ((flags & (uint)FrameRecordFlags.SideChannel) != 0) parts.Add("SideChannel");
         if ((flags & (uint)FrameRecordFlags.GameCrc) != 0) parts.Add("GameCRC");
         if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0) parts.Add("ObjectCensus");
+        if ((flags & (uint)FrameRecordFlags.RandomState) != 0) parts.Add("RandomState");
         if ((flags & (uint)FrameRecordFlags.GameSpeed) != 0) parts.Add("GameSpeed");
+        if ((flags & (uint)FrameRecordFlags.SelectionTriggers) != 0) parts.Add("SelectionTriggers");
         if ((flags & (uint)FrameRecordFlags.Extensions) != 0) parts.Add("Extensions");
         uint unknown = flags & ~(uint)FrameRecordFlags.Known;
         if (unknown != 0) parts.Add($"unknown 0x{unknown:X}");

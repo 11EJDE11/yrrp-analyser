@@ -69,6 +69,15 @@ public static class ReplayReader
                 "That is the signature of a pre-release recording written before the format was pinned.");
 
         var header = ParseHeader(head);
+        // Match ReplayFile.cpp's bounds before allocating embedded files or building analyses.
+        if (header.UniqueIDCounter < 0
+            || header.RandomNext1 < 0 || header.RandomNext1 >= ReplayFormat.RandomizerTableLength
+            || header.RandomNext2 < 0 || header.RandomNext2 >= ReplayFormat.RandomizerTableLength
+            || header.SpawnIniSize > ReplayFormat.MaxEmbeddedFileBytes
+            || header.SpawnMapSize > ReplayFormat.MaxEmbeddedFileBytes
+            || header.RecordedGameSpeed > ReplayFormat.MaxGameSpeedIndex)
+            throw new ReplayLoadException(ReplayLoadStatus.CorruptHeader,
+                "The header has an invalid object ID counter, RNG cursor, embedded file size, or game speed.");
 
         long iniOffset = headerSize;
         long mapOffset = iniOffset + header.SpawnIniSize;
@@ -131,13 +140,6 @@ public static class ReplayReader
             Magic = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetMagic)),
             Version = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetVersion)),
             HeaderSize = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetHeaderSize)),
-            MapName = ReadFixedString(h, ReplayFormat.OffsetMapName, ReplayFormat.MapNameLength),
-            SpawnerVersionMajor = h[ReplayFormat.OffsetSpawnerVersion + 0],
-            SpawnerVersionMinor = h[ReplayFormat.OffsetSpawnerVersion + 1],
-            SpawnerVersionRevision = h[ReplayFormat.OffsetSpawnerVersion + 2],
-            SpawnerVersionPatch = h[ReplayFormat.OffsetSpawnerVersion + 3],
-            GameClientVersion = ReadFixedString(h, ReplayFormat.OffsetGameClientVersion,
-                ReplayFormat.GameClientVersionLength),
             GameMode = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetGameMode)),
             UniqueIDCounter = BinaryPrimitives.ReadInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetUniqueIDCounter)),
             Seed = BinaryPrimitives.ReadInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetSeed)),
@@ -154,14 +156,6 @@ public static class ReplayReader
         };
     }
 
-    private static string ReadFixedString(byte[] buffer, int offset, int length)
-    {
-        var span = buffer.AsSpan(offset, length);
-        int end = span.IndexOf((byte)0);
-        if (end < 0) end = length;
-        return Encoding.UTF8.GetString(span[..end]).Trim();
-    }
-
     private static void ReadFrameStream(Stream file, ReplayDocument doc, IProgress<string>? progress)
     {
         using var inflate = new DeflateStream(file, CompressionMode.Decompress, leaveOpen: true);
@@ -174,7 +168,11 @@ public static class ReplayReader
         {
             while (true)
             {
-                if (!reader.TryRead(ReplayFormat.FrameRecordHeaderSize, out var fh)) break;
+                if (!reader.TryRead(ReplayFormat.FrameRecordHeaderSize, out var fh))
+                {
+                    doc.Truncated = fh.Length > 0;
+                    break;
+                }
 
                 int frameNumber = BinaryPrimitives.ReadInt32LittleEndian(fh);
                 int eventCount = BinaryPrimitives.ReadInt32LittleEndian(fh[4..]);
@@ -182,20 +180,30 @@ public static class ReplayReader
 
                 if (frameNumber == -1)
                 {
-                    doc.SawEndOfStream = true;
+                    if (eventCount == 0 && flags == 0)
+                        doc.SawEndOfStream = true;
+                    else
+                        doc.Warnings.Add("The end-of-stream marker has a nonzero event count or flags.");
                     break;
                 }
 
-                if (frameNumber < 0 || eventCount < 0)
+                if (frameNumber < 0 || eventCount < 0 || eventCount > ReplayFormat.MaxEventsPerFrame)
                 {
-                    doc.Warnings.Add($"Frame record {frames.Count} has a negative frame number or " +
+                    doc.Warnings.Add($"Frame record {frames.Count} has an invalid frame number or " +
                                      $"event count ({frameNumber}, {eventCount}); stopped reading here.");
+                    break;
+                }
+
+                if (frames.Count > 0 && frameNumber <= frames[^1].FrameNumber)
+                {
+                    doc.Warnings.Add($"Frame {frameNumber} does not follow frame {frames[^1].FrameNumber}; " +
+                                     "stopped reading here.");
                     break;
                 }
 
                 if ((flags & ~(uint)FrameRecordFlags.Known) != 0)
                 {
-                    // Blocks are stored bare and in flag order, so an unknown flag means the end
+                    // Blocks are stored bare and in write order, so an unknown flag means the end
                     // of that block is written down nowhere and nothing after it can be located.
                     doc.Warnings.Add($"Frame {frameNumber} carries unknown record flags 0x{flags:X8}; " +
                                      "the rest of the stream cannot be located and was not read.");
@@ -260,11 +268,9 @@ public static class ReplayReader
                     record.GameCrc = BinaryPrimitives.ReadUInt32LittleEndian(cb);
                 }
 
-                // Census and game speed are read here, ahead of the extension block, because that
-                // is the order the writer puts them in - not the numeric order of their flag bits.
-                // The extension block stays physically last on purpose: it is the only block that
-                // carries its own length, so anything written after it would be unreachable to a
-                // reader that stepped over it.
+                // ReplayFrameCodec.cpp reads census, RNG, speed, selection triggers, then
+                // extensions before gameplay events. This is not numeric flag-bit order.
+                // Census and RNG blocks are still readable but no longer written.
                 if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0)
                 {
                     if (!reader.TryRead(ReplayFormat.FrameObjectCensusSize, out var nb))
@@ -274,10 +280,41 @@ public static class ReplayReader
                         BinaryPrimitives.ReadInt32LittleEndian(nb[4..]));
                 }
 
+                if ((flags & (uint)FrameRecordFlags.RandomState) != 0)
+                {
+                    if (!reader.TryRead(ReplayFormat.FrameRandomStateSize, out var rb))
+                    { doc.Truncated = true; break; }
+                    record.RandomState = new FrameRandomState(
+                        BinaryPrimitives.ReadInt32LittleEndian(rb),
+                        BinaryPrimitives.ReadInt32LittleEndian(rb[4..]));
+                }
+
                 if ((flags & (uint)FrameRecordFlags.GameSpeed) != 0)
                 {
                     if (!reader.TryRead(4, out var sb)) { doc.Truncated = true; break; }
-                    record.GameSpeed = BinaryPrimitives.ReadInt32LittleEndian(sb);
+                    int speed = BinaryPrimitives.ReadInt32LittleEndian(sb);
+                    if (speed < 0 || speed > ReplayFormat.MaxGameSpeedIndex)
+                    {
+                        doc.Warnings.Add($"Frame {frameNumber} has invalid game speed {speed}; stopped reading here.");
+                        break;
+                    }
+                    record.GameSpeed = speed;
+                }
+
+                if ((flags & (uint)FrameRecordFlags.SelectionTriggers) != 0)
+                {
+                    if (!reader.TryRead(4, out var tc)) { doc.Truncated = true; break; }
+                    int count = BinaryPrimitives.ReadInt32LittleEndian(tc);
+                    if (count <= 0 || count > ReplayFormat.MaxSelectionTriggersPerFrame)
+                    {
+                        doc.Warnings.Add($"Frame {frameNumber} claims {count} selection triggers, " +
+                                         $"outside 1..{ReplayFormat.MaxSelectionTriggersPerFrame}; stopped reading here.");
+                        break;
+                    }
+                    if (!reader.TryRead(count * 4, out var ids)) { doc.Truncated = true; break; }
+                    record.SelectionTriggerIds = new uint[count];
+                    for (int i = 0; i < count; i++)
+                        record.SelectionTriggerIds[i] = BinaryPrimitives.ReadUInt32LittleEndian(ids[(i * 4)..]);
                 }
 
                 if ((flags & (uint)FrameRecordFlags.Extensions) != 0)
@@ -290,12 +327,9 @@ public static class ReplayReader
                                          "bytes, past the 1 MiB cap; stopped reading here.");
                         break;
                     }
-                    if (length > 0)
-                    {
-                        if (!reader.TryRead((int)length, out var ext)) { doc.Truncated = true; break; }
-                        record.Extension = ext.ToArray();
-                        doc.HasExtensionBlocks = true;
-                    }
+                    if (!reader.TryRead((int)length, out var ext)) { doc.Truncated = true; break; }
+                    record.Extension = ext.ToArray();
+                    doc.HasExtensionBlocks = true;
                 }
 
                 record.EventStart = eventBlob.Count / ReplayFormat.EventSize;
