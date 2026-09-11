@@ -72,7 +72,7 @@ public static class Exporters
             Dump(s, "LatencyLevel", s.LatencyLevel);
             Dump(s, "MaxAhead", s.MaxAhead);
             Dump(s, "ProcessMs", s.ProcessMs);
-            Dump(s, "OrderGapFrames", s.FrameInfoGap);
+            Dump(s, "FrameInfoGapFrames", s.FrameInfoGap);
             Dump(s, "RequestedFps", s.RequestedFps);
             Dump(s, "FrameSendRate", s.FrameSendRate);
         }
@@ -175,17 +175,17 @@ public static class Exporters
                     worstProcessMs = Math.Round(s.WorstProcessMs, 1),
                     medianMaxAhead = s.MedianMaxAhead,
                     worstMaxAhead = s.WorstMaxAhead,
-                    worstOrderGapFrames = s.WorstFrameInfoGap,
-                    frameInfoPackets = s.FrameInfoCount,
+                    worstFrameInfoGapFrames = s.WorstFrameInfoGap,
+                    frameInfoEvents = s.FrameInfoCount,
                 }),
-                stalls = network.Stalls.Take(50).Select(s => new
+                largeFrameInfoGaps = network.LargeFrameInfoGaps.Take(50).Select(s => new
                 {
                     houseIndex = s.HouseIndex,
                     name = s.Name,
                     startFrame = s.StartFrame,
                     endFrame = s.EndFrame,
                     frames = s.Frames,
-                    seconds = Math.Round(s.Seconds, 2),
+                    simulationSeconds = Math.Round(s.SimulationSeconds, 2),
                 }),
             },
             activity = activity.Players.Select(p => new

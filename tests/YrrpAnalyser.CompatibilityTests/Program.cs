@@ -251,6 +251,131 @@ Run("exports expose INI metadata, RNG cursors, and selection-trigger IDs", () =>
     finally { File.Delete(path); }
 });
 
+
+Run("PROCESS_TIME is an integer millisecond window mean, independent of game speed", () =>
+{
+    foreach (uint speed in new uint[] { 0, 1, 2, 6 })
+    {
+        var bytes = Fixture(Frames(w =>
+        {
+            Frame(w, 150, 1, 0); w.Write(Event(0x21, 0, 144, 12));
+            Frame(w, 280, 1, 0); w.Write(Event(0x21, 0, 270, 200));
+            End(w);
+        }));
+        Put(bytes, 1040, speed);
+        var doc = Load(bytes);
+        var network = NetworkAnalysis.Build(doc);
+        var s = network.Series.Single();
+        Equal(new Sample(150, 12), s.ProcessMs[0], "12 ms is not scaled to 200 ms");
+        Equal(new Sample(280, 200), s.ProcessMs[1], "a genuine 200 ms mean remains 200 ms");
+        var describer = new EventDescriber(TypeNameResolver.Load([], doc.SpawnMapIni));
+        Check(describer.Describe(doc.EnumerateEvents().First()).StartsWith("12 ms/frame mean main-loop work"),
+            "event description uses milliseconds and window mean");
+        var path = Path.GetTempFileName();
+        try
+        {
+            Exporters.WriteNetworkCsv(path, doc, network);
+            Check(File.ReadAllLines(path).Any(l => l.EndsWith(",ProcessMs,12")), "CSV uses corrected units");
+            Exporters.WriteSummaryJson(path, doc, network, ActivityAnalysis.Build(doc, describer));
+            using var json = JsonDocument.Parse(File.ReadAllText(path));
+            var player = json.RootElement.GetProperty("network").GetProperty("players")[0];
+            Equal(200.0, player.GetProperty("worstProcessMs").GetDouble(), "JSON maximum uses milliseconds");
+        }
+        finally { File.Delete(path); }
+    }
+});
+Run("ResponseTime2 removes the extra tick and uses the binary's 16 ms clock", () =>
+{
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 100, 6, 0);
+        foreach (byte encoded in new byte[] { 1, 13, 127, 0, 128, 255 })
+            w.Write(Event(0x30, 0, 90, (uint)(encoded | (3 << 8))));
+        End(w);
+    })));
+    var s = NetworkAnalysis.Build(doc).Series.Single();
+    Sequence(new[] { 0.0, 192.0, 2016.0 }, s.RoundTripMs.Select(p => p.Value).ToArray(),
+        "response +1 removed; zero and signed overflow excluded");
+    Equal(6, s.LatencyLevel.Count, "latency requests remain available even without a usable response");
+    var describer = new EventDescriber(TypeNameResolver.Load([], doc.SpawnMapIni));
+    var events = doc.EnumerateEvents().ToArray();
+    Check(describer.Describe(events[1]).Contains("192 ms"), "description matches response chart");
+    Check(describer.Describe(events[4]).Contains("unavailable"), "signed overflow is not a negative RTT");
+});
+Run("legacy RESPONSE_TIME reads payload byte six as a MaxAhead command, never RTT", () =>
+{
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 10, 1, 0);
+        var e = Event(0x1B, 0, 10, 99);
+        e[13] = 24;
+        w.Write(e); End(w);
+    })));
+    var network = NetworkAnalysis.Build(doc);
+    Check(network.Series.All(s => s.RoundTripMs.Count == 0), "legacy command excluded from RTT");
+    var describer = new EventDescriber(TypeNameResolver.Load([], doc.SpawnMapIni));
+    Equal("set MaxAhead to 24 frames", describer.Describe(doc.EnumerateEvents().Single()),
+        "read EventClass+0x0D, not the first payload byte");
+});
+Run("TIMING and FRAMEINFO retain scheduling units and distinguish record frames from scheduled frames", () =>
+{
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 100, 2, 0);
+        var timing = Event(0x20, 0, 90, 45u | (24u << 16));
+        timing[11] = 6;
+        w.Write(timing);
+        var info = Event(0x1C, 1, 96, 0xCAFEBABE);
+        BinaryPrimitives.WriteUInt16LittleEndian(info.AsSpan(11), 1234);
+        info[13] = 24;
+        w.Write(info);
+        End(w);
+    })));
+    var network = NetworkAnalysis.Build(doc);
+    var master = network.Series.Single(s => s.HouseIndex == 0);
+    var peer = network.Series.Single(s => s.HouseIndex == 1);
+    Equal(new Sample(100, 45), master.RequestedFps.Single(), "requested FPS in frames/second");
+    Equal(new Sample(100, 6), master.FrameSendRate.Single(), "send interval in simulation frames");
+    Equal(new Sample(100, 24), peer.MaxAhead.Single(), "FRAMEINFO delay remains frames");
+    var describer = new EventDescriber(TypeNameResolver.Load([], doc.SpawnMapIni));
+    Check(describer.Describe(doc.EnumerateEvents().First()).Contains("45 FPS, MaxAhead 24, FrameSendRate 6"),
+        "TIMING payload offsets");
+    Check(describer.Describe(doc.EnumerateEvents().Last()).Contains("1234"), "FRAMEINFO command-count offset");
+});
+Run("large FRAMEINFO gaps report nominal game time across speed changes, without claiming stalls", () =>
+{
+    var doc = Load(Fixture(Frames(w =>
+    {
+        for (int frame = 0; frame <= 24; frame += 3)
+        {
+            Frame(w, frame, 1, 0); w.Write(Event(0x1C, 1, (uint)frame, 0));
+        }
+        Frame(w, 60, 0, 64); w.Write(1);
+        Frame(w, 144, 1, 0); w.Write(Event(0x1C, 1, 140, 0));
+        End(w);
+    })));
+    var network = NetworkAnalysis.Build(doc);
+    var gap = network.LargeFrameInfoGaps.Single();
+    Equal(24, gap.StartFrame, "gap starts at previous consumption frame");
+    Equal(144, gap.EndFrame, "gap ends at next consumption frame");
+    Equal(120, gap.Frames, "simulation-frame gap");
+    Check(Math.Abs(gap.SimulationSeconds - (36.0 / 30 + 84.0 / 45)) < 1e-9, "game-time span integrates speeds");
+    var path = Path.GetTempFileName();
+    try
+    {
+        var describer = new EventDescriber(TypeNameResolver.Load([], doc.SpawnMapIni));
+        Exporters.WriteSummaryJson(path, doc, network, ActivityAnalysis.Build(doc, describer));
+        using var json = JsonDocument.Parse(File.ReadAllText(path));
+        var net = json.RootElement.GetProperty("network");
+        Check(!net.TryGetProperty("stalls", out _), "JSON no longer claims measured stalls");
+        Check(net.GetProperty("largeFrameInfoGaps")[0].TryGetProperty("simulationSeconds", out _),
+            "gap seconds explicitly describe simulation time");
+        Exporters.WriteNetworkCsv(path, doc, network);
+        Check(File.ReadAllText(path).Contains(",FrameInfoGapFrames,120"), "CSV labels frame spacing");
+    }
+    finally { File.Delete(path); }
+});
+
 Console.WriteLine($"{passed} passed, {failed} failed");
 return failed == 0 ? 0 : 1;
 

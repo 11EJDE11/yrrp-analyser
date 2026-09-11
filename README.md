@@ -36,14 +36,25 @@ Production events carry a position in the game's type array rather than a name, 
 
 ## Network
 
-Per-player round trip, latency level, MaxAhead, process time and order gap, sharing one time axis —
-drag any chart to pan and the rest follow, Ctrl+scroll to zoom, double-click to reset. Stalls are
-marked in red.
+Per-player connection response, requested latency level, MaxAhead, mean process time and
+FRAMEINFO spacing share one game-time axis. Drag any chart to pan and the rest follow,
+Ctrl+scroll to zoom, double-click to reset. Large FRAMEINFO gaps are marked in red.
+
+Process time is already milliseconds per frame, averaged over normally 128 frames. It measures
+main-loop work including input, rendering and logic, ending before the network queue and pacing
+wait. A raw value of 12 means 12 ms/frame, not the 200 ms earlier analyser builds displayed.
+
+ResponseTime2 is the peer's worst smoothed connection response, with its extra tick removed;
+the binary uses 16 ms ticks. It includes ACK servicing and possible retry delays. The legacy
+ResponseTime event sets MaxAhead and is not an RTT measurement.
+
+See [the binary audit](docs/network-event-audit.md) for addresses, formulas, and limitations.
 
 Two caveats, both in the format rather than the tool: the recording player has no MaxAhead line,
 because its own `FRAMEINFO` goes straight into the outgoing packet and never reaches the event
 queue; and dropped packets and retransmissions are counted below the event queue and are not in a
-replay at all. Order gap is the closest proxy the file holds.
+replay at all. FRAMEINFO gaps are simulation-frame intervals; without packet arrival timestamps,
+they cannot establish whether a real-time stall occurred or how long it lasted.
 
 ![Network](docs/network.png)
 

@@ -91,7 +91,7 @@ static int Report(string[] args)
 
     Console.WriteLine();
     Console.WriteLine($"Network  (protocol {network.Protocol}, FrameSendRate {network.ConfiguredFrameSendRate})");
-    Console.WriteLine("  house  player                 rtt med/max     process med/max   maxahead med/max  worst gap");
+    Console.WriteLine("  house  player                 response med/max  process mean med/max   maxahead med/max  worst gap");
     foreach (var s in network.Series)
     {
         Console.WriteLine($"  {s.HouseIndex,-6} {s.Name,-22} " +
@@ -101,13 +101,13 @@ static int Report(string[] args)
                           $"{s.WorstFrameInfoGap,5:0} frames");
     }
 
-    if (network.Stalls.Count > 0)
+    if (network.LargeFrameInfoGaps.Count > 0)
     {
         Console.WriteLine();
-        Console.WriteLine($"Stalls  ({network.Stalls.Count} total, worst first)");
-        foreach (var stall in network.Stalls.Take(10))
-            Console.WriteLine($"  {stall.Name,-22} frame {stall.StartFrame,7:N0} -> {stall.EndFrame,7:N0}  " +
-                              $"{stall.Frames,4} frames  {stall.Seconds,5:0.00}s");
+        Console.WriteLine($"Large FRAMEINFO gaps  ({network.LargeFrameInfoGaps.Count} total, largest first; game time only)");
+        foreach (var gap in network.LargeFrameInfoGaps.Take(10))
+            Console.WriteLine($"  {gap.Name,-22} frame {gap.StartFrame,7:N0} -> {gap.EndFrame,7:N0}  " +
+                              $"{gap.Frames,4} frames  {gap.SimulationSeconds,5:0.00} game seconds");
     }
 
     Console.WriteLine();

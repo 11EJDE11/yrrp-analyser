@@ -141,7 +141,7 @@ public sealed class EventDescriber(TypeNameResolver types)
                 uint crc = e.U32(0);
                 ushort commands = e.U16(4);
                 byte delay = e.U8(6);
-                return $"CRC {crc:X8}, sent {commands}, MaxAhead {delay}";
+                return $"CRC {crc:X8}, cumulative commands {commands}, MaxAhead {delay} frames";
             }
 
             case EventType.Timing:
@@ -156,23 +156,24 @@ public sealed class EventDescriber(TypeNameResolver types)
 
             case EventType.ProcessTime:
             {
-                // u16 Time = ProcessingTicks / ProcessingFrames over the last 128 frames, in
-                // 60 Hz system ticks. Emitted by every peer about itself when (Frame & 0x7F) == 0.
-                ushort ticks = e.U16(0);
-                return $"{ticks} ticks/frame ({NetworkAnalysis.TicksToMs(ticks):0.0} ms)";
+                // 0x55D3D4..0x55DE3A measures elapsed milliseconds before Queue_AI.
+                // 0x647772 divides their sum by ProcessingFrames, normally every 128 frames.
+                ushort milliseconds = e.U16(0);
+                return $"{milliseconds} ms/frame mean main-loop work (normally 128 frames)";
             }
 
             case EventType.ResponseTime:
-                return $"{e.U8(0)}";
+                // EventClass::Execute at 0x4C7A02 reads EventClass+0x0D, i.e. payload byte 6.
+                return $"set MaxAhead to {e.U8(6)} frames";
 
             case EventType.ResponseTime2:
             {
-                // Spawner ProtocolZero: i8 MaxAhead = IPX response time + 1, in 60 Hz ticks;
-                // u8 LatencyLevel = the level that response time maps to.
-                sbyte responseTicks = e.I8(0);
+                sbyte encodedTicks = e.I8(0);
                 byte level = e.U8(1);
-                return $"round trip {responseTicks} ticks " +
-                       $"({NetworkAnalysis.TicksToMs(responseTicks):0} ms), latency level {level}" +
+                string response = NetworkAnalysis.ResponseTime2Milliseconds(encodedTicks) is { } ms
+                    ? $"worst smoothed response {ms:0} ms (raw {encodedTicks}, includes +1 tick)"
+                    : $"response unavailable (raw {encodedTicks}: zero or signed-byte overflow)";
+                return $"{response}, requested latency level {level}" +
                        $" ({NetworkAnalysis.LatencyLevelName(level)})";
             }
 

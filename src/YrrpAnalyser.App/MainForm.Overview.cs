@@ -179,7 +179,7 @@ internal sealed partial class MainForm
         var view = MakeListView(
             ("House", 55), ("Slot", 45), ("Player", 170), ("Country", 110), ("Colour", 55),
             ("Start", 50), ("Kind", 140), ("Orders", 70), ("Commands", 80), ("APM", 60),
-            ("Round trip", 90), ("Process", 80), ("Left at", 80));
+            ("Response", 90), ("Process mean", 90), ("Left at", 80));
         view.Dock = DockStyle.None;
         view.Width = 1060;
         view.Height = 28 + Math.Max(1, doc.Roster.Players.Count) * 20;

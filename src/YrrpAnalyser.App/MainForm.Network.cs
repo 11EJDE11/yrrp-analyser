@@ -12,7 +12,7 @@ internal sealed partial class MainForm
         _networkCharts.Clear();
 
         int fps = doc.Header.SimulationFps;
-        var stallMarkers = network.Stalls
+        var gapMarkers = network.LargeFrameInfoGaps
             .Select(s => new ChartMarker(s.EndFrame, Theme.Danger, s.Name))
             .ToList();
 
@@ -21,7 +21,7 @@ internal sealed partial class MainForm
         _networkFlow.Controls.Add(ChartHint());
 
         _networkFlow.Controls.Add(Chart(
-            "Round trip time — each peer's own measurement, from ResponseTime2",
+            "Connection response — each peer's worst smoothed connection (ResponseTime2)",
             " ms", fps,
             network.Series.Where(s => s.RoundTripMs.Count > 0).Select(s => new ChartSeries
             {
@@ -30,10 +30,10 @@ internal sealed partial class MainForm
                 Style = SeriesStyle.Step,
                 Points = s.RoundTripMs,
             }),
-            stallMarkers));
+            gapMarkers));
 
         _networkFlow.Controls.Add(Chart(
-            "Latency level — the ladder rung ProtocolZero put each peer on (1 best, 9 worst)",
+            "Latency level request — each peer's requested ProtocolZero level (1 best, 9 highest)",
             "", fps,
             network.Series.Where(s => s.LatencyLevel.Count > 0).Select(s => new ChartSeries
             {
@@ -42,7 +42,7 @@ internal sealed partial class MainForm
                 Style = SeriesStyle.Step,
                 Points = s.LatencyLevel,
             }),
-            stallMarkers,
+            gapMarkers,
             minimumY: 9));
 
         _networkFlow.Controls.Add(Chart(
@@ -55,10 +55,10 @@ internal sealed partial class MainForm
                 Style = SeriesStyle.Step,
                 Points = s.MaxAhead,
             }),
-            stallMarkers));
+            gapMarkers));
 
         _networkFlow.Controls.Add(Chart(
-            "Process time — mean cost of simulating one frame on that peer's machine",
+            "Process time — mean main-loop work per frame, including input, rendering and logic",
             " ms", fps,
             network.Series.Where(s => s.ProcessMs.Count > 0).Select(s => new ChartSeries
             {
@@ -67,11 +67,11 @@ internal sealed partial class MainForm
                 Style = SeriesStyle.Step,
                 Points = s.ProcessMs,
             }),
-            stallMarkers,
+            gapMarkers,
             minimumY: 20));
 
         _networkFlow.Controls.Add(Chart(
-            "Order gap — frames between a peer's order packets. Spikes are stalls the game sat through",
+            "FRAMEINFO spacing — simulation frames between recorded events",
             " frames", fps,
             network.Series.Where(s => s.FrameInfoGap.Count > 0).Select(s => new ChartSeries
             {
@@ -80,13 +80,13 @@ internal sealed partial class MainForm
                 Style = SeriesStyle.Points,
                 Points = s.FrameInfoGap,
             }),
-            stallMarkers));
+            gapMarkers));
 
         var fpsSeries = network.Series.Where(s => s.RequestedFps.Count > 0).ToList();
         if (fpsSeries.Count > 0)
         {
             _networkFlow.Controls.Add(Chart(
-                "Negotiated frame rate — what the session master told everyone to run at",
+                "Requested frame rate — session target, not measured FPS",
                 " FPS", fps,
                 fpsSeries.Select(s => new ChartSeries
                 {
@@ -95,14 +95,14 @@ internal sealed partial class MainForm
                     Style = SeriesStyle.Step,
                     Points = s.RequestedFps,
                 }),
-                stallMarkers,
+                gapMarkers,
                 minimumY: 60));
         }
 
-        if (network.Stalls.Count > 0)
+        if (network.LargeFrameInfoGaps.Count > 0)
         {
-            _networkFlow.Controls.Add(SectionHeading($"Stalls ({network.Stalls.Count})"));
-            _networkFlow.Controls.Add(BuildStallList(doc, network));
+            _networkFlow.Controls.Add(SectionHeading($"Large FRAMEINFO gaps ({network.LargeFrameInfoGaps.Count})"));
+            _networkFlow.Controls.Add(BuildFrameInfoGapList(doc, network));
         }
 
         _networkFlow.Controls.Add(SectionHeading("Where these numbers come from"));
@@ -112,7 +112,7 @@ internal sealed partial class MainForm
             ForeColor = Theme.Muted,
             AutoSize = false,
             Width = 960,
-            Height = 250,
+            Height = 320,
             Margin = new Padding(0, 0, 0, 12),
         });
 
@@ -151,9 +151,9 @@ internal sealed partial class MainForm
     private static Control BuildNetworkSummary(NetworkAnalysis network)
     {
         var view = MakeListView(
-            ("House", 55), ("Player", 170), ("Round trip", 110), ("Worst", 80),
-            ("Latency level", 110), ("Process", 130), ("Worst", 80),
-            ("MaxAhead", 90), ("Worst gap", 90), ("Order packets", 100));
+            ("House", 55), ("Player", 170), ("Response", 110), ("Worst", 80),
+            ("Level request", 110), ("Process mean", 130), ("Worst", 80),
+            ("MaxAhead", 90), ("Worst gap", 90), ("FRAMEINFO", 100));
         view.Dock = DockStyle.None;
         view.Width = 980;
         view.Height = 28 + Math.Max(1, network.Series.Count) * 20;
@@ -186,26 +186,26 @@ internal sealed partial class MainForm
         return view;
     }
 
-    private static Control BuildStallList(ReplayDocument doc, NetworkAnalysis network)
+    private static Control BuildFrameInfoGapList(ReplayDocument doc, NetworkAnalysis network)
     {
         var view = MakeListView(
-            ("Player", 180), ("From", 90), ("To", 90), ("Frames", 80), ("Seconds", 80), ("At", 80));
+            ("Player", 180), ("From", 90), ("To", 90), ("Frames", 80), ("Game seconds", 100), ("At", 80));
         view.Dock = DockStyle.None;
         view.Width = 620;
-        view.Height = 26 + Math.Min(12, Math.Max(1, network.Stalls.Count)) * 20;
+        view.Height = 26 + Math.Min(12, Math.Max(1, network.LargeFrameInfoGaps.Count)) * 20;
         view.Margin = new Padding(0, 0, 0, 10);
 
-        foreach (var stall in network.Stalls.Take(200))
+        foreach (var gap in network.LargeFrameInfoGaps.Take(200))
         {
             view.Items.Add(new ListViewItem([
-                stall.Name,
-                stall.StartFrame.ToString("N0"),
-                stall.EndFrame.ToString("N0"),
-                stall.Frames.ToString("N0"),
-                $"{stall.Seconds:0.00}",
-                doc.TimeLabel(stall.StartFrame),
+                gap.Name,
+                gap.StartFrame.ToString("N0"),
+                gap.EndFrame.ToString("N0"),
+                gap.Frames.ToString("N0"),
+                $"{gap.SimulationSeconds:0.00}",
+                doc.TimeLabel(gap.StartFrame),
             ])
-            { ForeColor = Theme.ForHouse(stall.HouseIndex) });
+            { ForeColor = Theme.ForHouse(gap.HouseIndex) });
         }
 
         return view;

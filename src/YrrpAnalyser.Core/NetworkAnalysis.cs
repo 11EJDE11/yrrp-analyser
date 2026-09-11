@@ -8,16 +8,16 @@ public sealed class PlayerNetworkSeries
     public int HouseIndex { get; init; }
     public string Name { get; init; } = "";
 
-    /// <summary>ResponseTime2: measured round-trip time, in milliseconds.</summary>
+    /// <summary>ResponseTime2: the peer's worst smoothed connection response, with the +1 tick removed.</summary>
     public List<Sample> RoundTripMs { get; } = [];
 
-    /// <summary>ResponseTime2: the latency level that round-trip time maps to (1-9).</summary>
+    /// <summary>ResponseTime2: the peer's requested latency level (1-9), before session-wide limits.</summary>
     public List<Sample> LatencyLevel { get; } = [];
 
     /// <summary>FRAMEINFO Delay: the MaxAhead this peer was scheduling its orders at.</summary>
     public List<Sample> MaxAhead { get; } = [];
 
-    /// <summary>PROCESS_TIME: mean simulation cost per frame on this peer, in milliseconds.</summary>
+    /// <summary>PROCESS_TIME: mean elapsed main-loop work per frame, already in milliseconds.</summary>
     public List<Sample> ProcessMs { get; } = [];
 
     /// <summary>TIMING: the frame rate the session master asked everyone to run at.</summary>
@@ -27,9 +27,8 @@ public sealed class PlayerNetworkSeries
     public List<Sample> FrameSendRate { get; } = [];
 
     /// <summary>
-    /// Gaps between consecutive FRAMEINFO packets from this peer, in frames. A live game cannot
-    /// advance past a peer's last delivered FRAMEINFO, so a gap here is a stall the recording
-    /// machine actually sat through.
+    /// Simulation-frame gaps between consecutive recorded FRAMEINFO events from this peer.
+    /// The replay records consumption frames, not packet arrival timestamps or time spent waiting.
     /// </summary>
     public List<Sample> FrameInfoGap { get; } = [];
 
@@ -55,21 +54,21 @@ public sealed class PlayerNetworkSeries
     }
 }
 
-/// <summary>A run of frames where a peer's FRAMEINFO stopped arriving for longer than usual.</summary>
-public sealed class StallEvent
+/// <summary>An unusually large gap in recorded FRAMEINFO consumption frames; not a measured stall.</summary>
+public sealed class FrameInfoGapInterval
 {
     public int HouseIndex { get; init; }
     public string Name { get; init; } = "";
     public int StartFrame { get; init; }
     public int EndFrame { get; init; }
     public int Frames => EndFrame - StartFrame;
-    public double Seconds { get; init; }
+    public double SimulationSeconds { get; init; }
 }
 
 public sealed class NetworkAnalysis
 {
     public List<PlayerNetworkSeries> Series { get; } = [];
-    public List<StallEvent> Stalls { get; } = [];
+    public List<FrameInfoGapInterval> LargeFrameInfoGaps { get; } = [];
 
     /// <summary>Houses whose events appear in the file but that spawn.ini does not account for.</summary>
     public List<int> UnknownHouses { get; } = [];
@@ -78,12 +77,21 @@ public sealed class NetworkAnalysis
     public int Protocol { get; private set; }
     public int ConfiguredFrameSendRate { get; private set; }
 
-    /// <summary>60 Hz system ticks to milliseconds. Every engine timing value is in these.</summary>
-    public static double TicksToMs(double ticks) => ticks * (1000.0 / 60.0);
+    // gamemd SystemTimerClass::operator() at 0x6C8C40 returns timeGetTime() >> 4.
+    // PROCESS_TIME uses unshifted timeGetTime() and must never use this conversion.
+    public const int SystemTickMilliseconds = 16;
+
+    /// <summary>
+    /// ProtocolZero stores Response_Time() + 1 in a signed byte. Zero is ignored by playback;
+    /// negative values have overflowed and cannot be treated as a meaningful RTT.
+    /// </summary>
+    public static double? ResponseTime2Milliseconds(sbyte encodedTicks) =>
+        encodedTicks > 0 ? (encodedTicks - 1) * (double)SystemTickMilliseconds : null;
 
     /// <summary>
     /// ProtocolZero's latency ladder, from ProtocolZero.LatencyLevel.cpp. The level a peer reports
-    /// is the lowest whose MaxAhead covers its measured round-trip time.
+    /// is the lowest whose threshold covers its response-tick count. The session applies the
+    /// highest recent request, capped by MaxLatencyLevel, and does not lower an applied level.
     /// </summary>
     public static readonly int[] LatencyLevelMaxAhead = [1, 4, 6, 12, 16, 20, 24, 28, 32, 36];
 
@@ -140,7 +148,8 @@ public sealed class NetworkAnalysis
                     var s = SeriesFor(house);
                     sbyte ticks = e.I8(0);
                     byte level = e.U8(1);
-                    s.RoundTripMs.Add(new Sample(frame, TicksToMs(ticks)));
+                    if (ResponseTime2Milliseconds(ticks) is { } milliseconds)
+                        s.RoundTripMs.Add(new Sample(frame, milliseconds));
                     s.LatencyLevel.Add(new Sample(frame, level));
                     break;
                 }
@@ -148,7 +157,7 @@ public sealed class NetworkAnalysis
                 case EventType.ProcessTime:
                 {
                     var s = SeriesFor(house);
-                    s.ProcessMs.Add(new Sample(frame, TicksToMs(e.U16(0))));
+                    s.ProcessMs.Add(new Sample(frame, e.U16(0)));
                     break;
                 }
 
@@ -171,28 +180,22 @@ public sealed class NetworkAnalysis
                     break;
                 }
 
-                case EventType.ResponseTime:
-                {
-                    var s = SeriesFor(house);
-                    s.RoundTripMs.Add(new Sample(frame, TicksToMs(e.U8(0))));
-                    break;
-                }
+                // Legacy RESPONSE_TIME sets global MaxAhead from payload byte 6.
+                // It is a scheduling command, not a connection response measurement.
             }
         }
 
         analysis.Series.Sort((a, b) => a.HouseIndex.CompareTo(b.HouseIndex));
-        analysis.DetectStalls(doc);
+        analysis.FindLargeFrameInfoGaps(doc);
         return analysis;
     }
 
     /// <summary>
-    /// A stall is a FRAMEINFO gap well above what this peer normally runs at. The expected
-    /// spacing is FrameSendRate frames, but it moves with the latency level, so the threshold is
-    /// taken from the peer's own median gap rather than from the configured rate.
+    /// Highlight spacing outliers using the peer's median recorded gap. These are simulation
+    /// intervals only: packet arrival times and wall-clock stall durations are absent.
     /// </summary>
-    private void DetectStalls(ReplayDocument doc)
+    private void FindLargeFrameInfoGaps(ReplayDocument doc)
     {
-        int fps = Math.Max(1, doc.Header.SimulationFps);
 
         foreach (var s in Series)
         {
@@ -200,30 +203,27 @@ public sealed class NetworkAnalysis
 
             var sorted = s.FrameInfoGap.Select(g => g.Value).OrderBy(v => v).ToArray();
             double median = sorted[sorted.Length / 2];
-            // Three times the normal spacing, and never less than a third of a second, so a peer
-            // sending every frame does not produce a stall list thousands of rows long.
-            double threshold = Math.Max(median * 3, fps / 3.0);
-
-            int previousFrame = s.FrameInfoFrames[0];
+            // A display heuristic: three times the usual spacing, with a floor of one third
+            // of a nominal game second at the speed recorded at the end of the interval.
             foreach (var gap in s.FrameInfoGap)
             {
+                double threshold = Math.Max(median * 3, doc.GameSpeed.FpsAt(gap.Frame) / 3.0);
                 if (gap.Value >= threshold)
                 {
-                    Stalls.Add(new StallEvent
+                    LargeFrameInfoGaps.Add(new FrameInfoGapInterval
                     {
                         HouseIndex = s.HouseIndex,
                         Name = s.Name,
                         StartFrame = (int)(gap.Frame - gap.Value),
                         EndFrame = gap.Frame,
-                        Seconds = gap.Value / fps,
+                        SimulationSeconds = doc.GameSpeed.SecondsAt(gap.Frame)
+                                            - doc.GameSpeed.SecondsAt((int)(gap.Frame - gap.Value)),
                     });
                 }
-                previousFrame = gap.Frame;
             }
-            _ = previousFrame;
         }
 
-        Stalls.Sort((a, b) => b.Frames.CompareTo(a.Frames));
+        LargeFrameInfoGaps.Sort((a, b) => b.Frames.CompareTo(a.Frames));
     }
 
     /// <summary>
@@ -231,20 +231,21 @@ public sealed class NetworkAnalysis
     /// nobody reads a missing number as a healthy one.
     /// </summary>
     public const string ProvenanceNote =
-        "Every figure here is read out of the game's own network events as they were recorded.\n\n" +
-        "• Round trip and latency level come from the spawner's ResponseTime2 event, which each " +
-        "peer emits about itself, so both sides of the connection are covered.\n" +
-        "• Process time is PROCESS_TIME: the mean cost of simulating a frame on that peer's " +
-        "machine, averaged over the preceding 128 frames. High values are a slow computer, not a slow link.\n" +
-        "• MaxAhead is the Delay field of each remote peer's FRAMEINFO - how far ahead of the " +
-        "current frame it was scheduling its orders. It rises as its connection degrades.\n" +
-        "• Order gap is the spacing between a peer's FRAMEINFO packets. The simulation cannot " +
-        "advance past the last one delivered, so a gap is a stall the recording machine sat through.\n\n" +
-        "FRAMEINFO only ever arrives from remote peers: the recording machine writes its own " +
-        "straight into the outgoing packet, so it never reaches the event queue and never reaches " +
-        "the file. The recording player therefore has no MaxAhead or order-gap line.\n\n" +
-        "Dropped packets and retransmissions are not in a replay. Both are counted below the event " +
-        "queue, inside ConnectionClass, and nothing carries them into an event - so they cannot be " +
-        "recovered from a recording made by this version. Order gap is the closest proxy the file " +
-        "does contain.";
+        "Samples are placed at the simulation frame where the replay recorded the event, which " +
+        "can be later than its measurement. The time axis is nominal game time.\n\n" +
+        "\u2022 Process time is mean elapsed main-loop work, already in milliseconds, normally " +
+        "reported every 128 frames. It includes input, rendering and game logic; Queue_AI and " +
+        "Sync_Delay run after the measurement. It is not an individual frame or pure CPU time.\n" +
+        "\u2022 ResponseTime2 reports each peer's worst smoothed connection response. The chart " +
+        "removes its +1 tick margin and uses the binary's 16 ms ticks. ACK servicing delays and " +
+        "retries can contribute, so this is not a pure network ping. Zero/negative encoded values " +
+        "are omitted from the response chart.\n" +
+        "\u2022 Latency level is each peer's request. The session applies the highest recent request, " +
+        "subject to its configured cap, and does not lower an already applied level.\n" +
+        "\u2022 MaxAhead is the sender's FRAMEINFO scheduling delay, in simulation frames. TIMING " +
+        "carries the requested session FPS and send interval; it does not measure achieved FPS.\n" +
+        "\u2022 FRAMEINFO spacing and highlighted gaps measure simulation-frame distances between " +
+        "recorded events. They cannot establish real-time stalls, packet loss or retransmission counts.\n\n" +
+        "The recorder's own FRAMEINFO is written directly into outgoing packets, so it has no " +
+        "FRAMEINFO MaxAhead or spacing samples. Legacy ResponseTime sets MaxAhead and is not an RTT sample.";
 }
