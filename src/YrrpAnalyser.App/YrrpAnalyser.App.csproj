@@ -11,4 +11,8 @@
   <ItemGroup>
     <ProjectReference Include="..\YrrpAnalyser.Core\YrrpAnalyser.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The cnc ladder's YR cameo sprite sheet; see CameoAtlas.Data.cs for where the offsets come from. -->
+    <EmbeddedResource Include="Resources\yr-cameo.png" LogicalName="YrrpAnalyser.App.Resources.yr-cameo.png" />
+  </ItemGroup>
 </Project>

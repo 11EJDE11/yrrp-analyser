@@ -7,9 +7,9 @@ using YrrpAnalyser;
 // These fixtures deliberately use numeric wire offsets and flags from the C++ format, never
 // ReplayFormat constants: changing the parser's layout must not silently change its test input.
 int passed = 0, failed = 0;
-Run("all 512 frame flag combinations preserve block and event alignment", () =>
+Run("all 1024 frame flag combinations preserve block and event alignment", () =>
 {
-    for (uint flags = 0; flags < 512; flags++)
+    for (uint flags = 0; flags < 1024; flags++)
     {
         var doc = Load(Fixture(Frames(w =>
         {
@@ -22,6 +22,7 @@ Run("all 512 frame flag combinations preserve block and event alignment", () =>
             if ((flags & 128) != 0) { w.Write(249); w.Write(17); }
             if ((flags & 64) != 0) w.Write(1);
             if ((flags & 256) != 0) { w.Write(2); w.Write(90u); w.Write(0xF1234567u); }
+            if ((flags & 512) != 0) { w.Write(2); w.Write(HouseSample(0, 5000, 100)); w.Write(HouseSample(1, 7000, 0, flags: 1)); }
             if ((flags & 16) != 0) { w.Write(3u); w.Write(new byte[] { 0xED, 0xAB, 0xCD }); }
             w.Write(Event(0x04, 3, 64, 0x12345678));
             w.Write(Event(0x1B, -1, 65, 0x87654321));
@@ -53,6 +54,15 @@ Run("all 512 frame flag combinations preserve block and event alignment", () =>
         Equal((flags & 128) != 0 ? new FrameRandomState(249, 17) : (FrameRandomState?)null, f.RandomState, "RNG");
         Equal((flags & 64) != 0 ? 1 : (int?)null, f.GameSpeed, "speed");
         Sequence((flags & 256) != 0 ? new uint[] { 90, 0xF1234567 } : null, f.SelectionTriggerIds, "triggers");
+        if ((flags & 512) != 0)
+        {
+            Equal(2, f.HouseStats!.Length, "house samples");
+            Equal(5000, f.HouseStats[0].Credits, "sample credits");
+            Equal(100, f.HouseStats[0].CreditsSpent, "sample spent");
+            Equal(1, f.HouseStats[1].HouseIndex, "second sample house");
+            Equal(HouseStatsFlags.Defeated, f.HouseStats[1].Flags, "sample flags");
+        }
+        else Check(f.HouseStats is null, "absent house stats");
         Sequence((flags & 16) != 0 ? new byte[] { 0xED, 0xAB, 0xCD } : null, f.Extension, "extension");
         Equal((flags & 16) != 0, doc.HasExtensionBlocks, "extension presence");
         var events = doc.EnumerateEvents().ToArray();
@@ -67,13 +77,14 @@ Run("all 512 frame flag combinations preserve block and event alignment", () =>
         Equal(0xCAFEBABEu, doc.Frames[1].GameCrc, "following CRC");
     }
 });
-Run("1072-byte header fields, embedded UTF-8 metadata, and appended header bytes", () =>
+Run("1084-byte header fields, embedded UTF-8 metadata, and appended header bytes", () =>
 {
     foreach (int extra in new[] { 0, 32 })
     {
         var doc = Load(Fixture(Frames(End), extraHeaderBytes: extra));
         var h = doc.Header;
-        Equal(1072u + (uint)extra, h.HeaderSize, "header size");
+        Equal(1084u + (uint)extra, h.HeaderSize, "header size");
+        Check(!h.HasStatisticsSection && doc.Statistics is null, "no statistics section");
         Equal(5u, h.GameMode, "game mode");
         Equal(777, h.UniqueIDCounter, "unique ID");
         Equal(-123456, h.Seed, "seed");
@@ -93,6 +104,8 @@ Run("1072-byte header fields, embedded UTF-8 metadata, and appended header bytes
         Check(doc.SawEndOfStream && doc.Warnings.Count == 0, "stream begins at header + INI sizes");
     }
 });
+Run("a header without the statistics fields is rejected", () =>
+    Reject(Fixture(Frames(End), extraHeaderBytes: -12), ReplayLoadStatus.CorruptHeader));
 Run("empty recording below the old minimum size and campaign metadata fallbacks", () =>
 {
     var bytes = Fixture(Frames(End), ini: "", map: "");
@@ -141,7 +154,7 @@ Run("invalid header bounds are classified before parsing frames", () =>
 {
     foreach (var (offset, value) in new (int, uint)[]
     {
-        (8, 1071), (8, uint.MaxValue), (16, uint.MaxValue), (24, uint.MaxValue),
+        (8, 1083), (8, uint.MaxValue), (16, uint.MaxValue), (24, uint.MaxValue),
         (24, 250), (28, 250), (1032, 32 * 1024 * 1024 + 1),
         (1036, 32 * 1024 * 1024 + 1), (1040, 7), (1032, 5000),
     })
@@ -167,7 +180,9 @@ Run("invalid counts, speed, unknown flags, frame sequence, and end markers stop 
     invalid.Add(w => Frame(w, 2, 16385, 0));
     invalid.Add(w => Frame(w, 2, -1, 0));
     invalid.Add(w => Frame(w, -2, 0, 0));
-    invalid.Add(w => Frame(w, 2, 0, 512));
+    invalid.Add(w => Frame(w, 2, 0, 1024));
+    foreach (int n in new[] { -1, 0, 33 })
+        invalid.Add(w => { Frame(w, 2, 0, 512); w.Write(n); });
     invalid.Add(w => Frame(w, 0, 0, 0));
     invalid.Add(w => Frame(w, 1, 0, 0));
     invalid.Add(w => { Frame(w, 2, 0, 16); w.Write(1048577u); });
@@ -287,13 +302,111 @@ Run("checkpoint archive after the frame stream: index, payload split, CRC, and s
         () => Fixture(raw, archive: Archive((121, Payload(8, 8), null))),
         () => Fixture(raw, archive: Archive(Enumerable.Range(1, 5).Select(i => (i, Payload(8, 8), (uint?)null)).ToArray())),
         () => { var b = Fixture(raw, archive: Archive((10, Payload(8, 8), null))); Put(b, 1068, BitConverter.ToUInt32(b, 1068) - 1); return b; },
-        () => [.. Fixture(raw, archive: Archive((10, Payload(8, 8), null))), 0],
+        () => { var b = Fixture(raw, archive: Archive((10, Payload(8, 8), null))); Put(b, 1068, BitConverter.ToUInt32(b, 1068) + 1); return b; },
     })
     {
         doc = Load(bad());
         Equal(0, doc.Checkpoints.Count, "archive ignored");
         Check(doc.SawEndOfStream && doc.Frames.Count == 2 && doc.Warnings.Count > 0, "frames intact, archive diagnosed");
     }
+
+    // The archive no longer has to run to EOF: the statistics section may follow it.
+    doc = Load([.. Fixture(raw, archive: Archive((10, Payload(8, 8), null))), 0, 0, 0]);
+    Equal(1, doc.Checkpoints.Count, "bytes after the archive are allowed");
+    Check(doc.Warnings.Count == 0, "no warning for bytes after the archive");
+
+    // Extracting a save returns the savegame part of the payload, byte for byte.
+    string path = Path.GetTempFileName();
+    try
+    {
+        File.WriteAllBytes(path, Fixture(raw, archive: Archive((30, Payload(5000, 300), null))));
+        var loaded = ReplayReader.Load(path);
+        var save = CheckpointArchiveReader.ExtractSave(path, loaded.Checkpoints.Single());
+        Sequence(Payload(5000, 300)[4..5004], save, "extracted save bytes");
+    }
+    finally { File.Delete(path); }
+});
+Run("statistics section: type table, house records, the game's packet, and unknown chunks", () =>
+{
+    var raw = Frames(w =>
+    {
+        Frame(w, 0, 0, 512); w.Write(1); w.Write(HouseSample(0, 10000, 0));
+        Frame(w, 60, 0, 512); w.Write(1); w.Write(HouseSample(0, 9000, 2500, army: 1800, harvested: 1200));
+        End(w);
+    });
+    var section = Chunks(("TYPE", TypeChunk()), ("ZZZZ", new byte[] { 1, 2, 3 }), ("HOUS", HouseChunk()),
+        ("GAME", GameChunk()), ("STAT", StatsPacket()));
+    var doc = Load(Fixture(raw, statistics: section));
+    Check(doc.SawEndOfStream && doc.Warnings.Count == 0, "clean parse with an unknown chunk");
+    Check(doc.Header.HasStatisticsSection, "header points at the section");
+    Equal(Load(Fixture(raw)).CompressedStreamBytes, doc.CompressedStreamBytes, "stream size stops at the section");
+
+    var stats = doc.Statistics!;
+    var grizzly = stats.Types.Get(AbstractType.UnitType, 1)!;
+    Equal("MTNK", grizzly.Id, "type ID");
+    Equal("gtnkicon", grizzly.Cameo, "type cameo");
+    Equal("Grizzly Battle Tank", grizzly.Name, "type UI name");
+    Equal(700, grizzly.Cost, "type cost");
+    Equal("Grizzly Battle Tank [MTNK]", TypeNameResolver.ForDocument(doc, []).Describe(AbstractType.UnitType, 1),
+        "event names come from the recording's own type table");
+
+    var house = stats.Houses.Single();
+    Equal("Tester", house.Name, "house name");
+    Equal("Americans", house.Country, "house country");
+    Equal(HouseStatsFlags.Winner, house.Flags, "house flags");
+    Equal(9000, house.Credits, "house credits");
+    Equal(3, house.UnitsKilledOfHouse[1], "units killed of house 1");
+    Equal(1, house.BuildingsKilledOfHouse[1], "buildings killed of house 1");
+    Sequence(new[] { 0, 2 }, house.Array(StatisticsArray.BuiltUnits), "built units array");
+    Equal(2, house.Total(StatisticsArray.BuiltUnits), "built units total");
+    Sequence(new[] { 0, 1 }, house.Array(StatisticsArray.LostUnits), "recorder's lost units array");
+    Equal(1500, house.IncomeFrom(IncomeSource.Harvested), "harvested income");
+    Equal(300, house.IncomeFrom(IncomeSource.Refunded), "refunded income");
+    Equal(1800, house.IncomeTotal, "income total");
+
+    var game = stats.Game!;
+    Equal(60, game.EndFrame, "game end frame");
+    Equal(42, game.OutOfSyncFrame, "first out-of-sync frame");
+    Check(game.OutOfSync && !game.SawCompletion, "game flags");
+
+    var packet = stats.StatsPacket!;
+    Equal("qmtest1", packet.Text("NAM0"), "packet name");
+    Equal(256L, packet.Number("CMP0"), "packet completion");
+    Sequence(new[] { 0, 5 }, packet.Get("UNB0")!.Counts, "packet count array is big-endian");
+    Equal("Map 世", packet.Text("SCEN"), "packet map name is UTF-16");
+    Equal(0, packet.Get("NAM0")!.PlayerIndex, "per-player digit");
+    Equal(-1, packet.Get("SCEN")!.PlayerIndex, "game field");
+
+    var analysis = StatisticsAnalysis.Build(doc);
+    var t = analysis.Houses.Single();
+    Equal(1500.0, t.TotalIncome, "income is money on hand moved plus spent moved");
+    Equal(1800.0, t.PeakArmyValue, "peak army value");
+    Check(analysis.HasHarvestData && analysis.HasIncomeSources, "harvest data present");
+    Equal(1200.0, t.Harvested[^1].Value, "harvested series from the recorder's counter");
+    Equal("Tester", t.Name, "timeline name from the roster");
+
+    string csv = Path.GetTempFileName();
+    try
+    {
+        Exporters.WriteHouseStatsCsv(csv, doc);
+        Equal(3, File.ReadAllLines(csv).Length, "one CSV row per sample");
+        Exporters.WriteSummaryJson(csv, doc, NetworkAnalysis.Build(doc),
+            ActivityAnalysis.Build(doc, new EventDescriber(TypeNameResolver.ForDocument(doc, []))));
+        using var json = JsonDocument.Parse(File.ReadAllText(csv));
+        var counts = json.RootElement.GetProperty("statistics").GetProperty("houses")[0].GetProperty("counts");
+        Equal(2, counts.GetProperty("BuiltUnits").GetProperty("MTNK").GetInt32(), "JSON counts keyed by type ID");
+        Equal(1, counts.GetProperty("LostUnits").GetProperty("MTNK").GetInt32(), "JSON lost counts");
+        var statistics = json.RootElement.GetProperty("statistics");
+        Equal(1500, statistics.GetProperty("houses")[0].GetProperty("income").GetProperty("Harvested").GetInt32(), "JSON income");
+        Equal(42, statistics.GetProperty("game").GetProperty("OutOfSyncFrame").GetInt32(), "JSON game record");
+    }
+    finally { File.Delete(csv); }
+
+    // A malformed chunk keeps what came before it.
+    var broken = Chunks(("TYPE", TypeChunk()), ("HOUS", new byte[] { 5, 0, 0, 0 }));
+    doc = Load(Fixture(raw, statistics: broken));
+    Check(doc.Statistics!.Types.HasData && doc.Statistics.Houses.Count == 0 && doc.Warnings.Count > 0,
+        "malformed chunk diagnosed, earlier chunks kept");
 });
 
 
@@ -480,6 +593,90 @@ static byte[] Chat()
     Encoding.Unicode.GetBytes("hello \u4e16\u754c").CopyTo(b, 73);
     return b;
 }
+// HouseStatsSample: 28 little-endian int32 fields - 20 house fields, 7 income sources, flags last.
+static byte[] HouseSample(int house, int credits, int spent, uint flags = 0, int army = 0, int harvested = 0)
+{
+    var b = new byte[112];
+    Put(b, 0, (uint)house); Put(b, 4, (uint)credits); Put(b, 12, (uint)spent);
+    Put(b, 44, (uint)army); Put(b, 80, (uint)harvested); Put(b, 108, flags);
+    return b;
+}
+static byte[] GameChunk()
+{
+    var b = new byte[20];
+    BinaryPrimitives.WriteUInt64LittleEndian(b, 1_800_000_900ul);
+    Put(b, 8, 60); Put(b, 12, 42); b[16] = 1; b[17] = 0;
+    return b;
+}
+static byte[] Chunks(params (string Tag, byte[] Body)[] chunks)
+{
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    foreach (var (tag, body) in chunks) { w.Write(Encoding.ASCII.GetBytes(tag)); w.Write((uint)body.Length); w.Write(body); }
+    w.Flush();
+    return buffer.ToArray();
+}
+static byte[] TypeChunk()
+{
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    w.Write(1u);            // one list
+    w.Write(40u);           // AbstractType::UnitType
+    w.Write(2u);
+    foreach (var (id, cameo, name, cost) in new[] { ("AMCV", "mcvicon", "Allied MCV", 3000), ("MTNK", "gtnkicon", "Grizzly Battle Tank", 700) })
+    {
+        var idBytes = new byte[0x18]; Encoding.ASCII.GetBytes(id).CopyTo(idBytes, 0); w.Write(idBytes);
+        var cameoBytes = new byte[0x19]; Encoding.ASCII.GetBytes(cameo).CopyTo(cameoBytes, 0); w.Write(cameoBytes);
+        w.Write((ushort)name.Length); w.Write(Encoding.Unicode.GetBytes(name));
+        w.Write(cost); w.Write(0u);
+    }
+    w.Flush();
+    return buffer.ToArray();
+}
+static byte[] HouseChunk()
+{
+    var record = new byte[310];
+    Put(record, 282, 1500);     // Income[Harvested]
+    Put(record, 282 + 12, 300); // Income[Refunded]
+    Encoding.Unicode.GetBytes("Tester").CopyTo(record, 4);
+    Encoding.ASCII.GetBytes("Americans").CopyTo(record, 46);
+    Put(record, 70, 3); Put(record, 74, 1); Put(record, 78, 1); Put(record, 82, 2);
+    Put(record, 86, 9000); Put(record, 94, 2500); Put(record, 110, 4); Put(record, 118, 1234);
+    Put(record, 122 + 4, 3);    // UnitsKilledOfHouse[1]
+    Put(record, 202 + 4, 1);    // BuildingsKilledOfHouse[1]
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    w.Write(1u);
+    w.Write(record);
+    w.Write(18u);
+    for (int a = 0; a < 18; a++)
+    {
+        if (a == 2) { w.Write(2u); w.Write(0); w.Write(2); }        // BuiltUnits: two of type 1
+        else if (a == 16) { w.Write(2u); w.Write(0); w.Write(1); }  // LostUnits: one of type 1
+        else w.Write(0u);
+    }
+    w.Flush();
+    return buffer.ToArray();
+}
+// The game's statistics packet: big-endian, tag/type/length fields padded to four bytes.
+static byte[] StatsPacket()
+{
+    static byte[] Be(params int[] values) => values.SelectMany(v => new[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v }).ToArray();
+    static byte[] Field(string tag, ushort type, byte[] data)
+    {
+        var field = new List<byte>(Encoding.ASCII.GetBytes(tag)) { (byte)(type >> 8), (byte)type, (byte)(data.Length >> 8), (byte)data.Length };
+        field.AddRange(data);
+        while (field.Count % 4 != 0) field.Add(0);
+        return [.. field];
+    }
+    var body = new List<byte>();
+    body.AddRange(Field("NAM0", 7, Encoding.ASCII.GetBytes("qmtest1\0")));
+    body.AddRange(Field("CMP0", 6, Be(256)));
+    body.AddRange(Field("UNB0", 20, Be(0, 5)));
+    body.AddRange(Field("SCEN", 20, [.. Encoding.Unicode.GetBytes("Map 世"), 0, 0]));
+    int length = body.Count + 4;
+    return [(byte)(length >> 8), (byte)length, 0, 0, .. body];
+}
 static byte[] Payload(int saveBytes, int sidecarBytes, int trailing = 0)
 {
     using var buffer = new MemoryStream();
@@ -519,14 +716,14 @@ static uint Crc(byte[] data)
     return ~c;
 }
 static byte[] Fixture(byte[] raw, int extraHeaderBytes = 0, string? ini = null,
-    string? map = null, bool syncFlushOnly = false, byte[]? archive = null)
+    string? map = null, bool syncFlushOnly = false, byte[]? archive = null, byte[]? statistics = null)
 {
     var spawn = Encoding.UTF8.GetBytes(ini ??
         "\uFEFF[Settings]\nUIMapName=Test \u4e16\u754c\nGamePackageVersion=9.8.7\n" +
         "GameClientVersion=obsolete\nName=Tester\nSide=0\nColor=0\nIsSinglePlayer=yes\n" +
         "[Tunnel]\nIp=198.51.100.20\n");
     var spawnmap = Encoding.UTF8.GetBytes(map ?? "[Basic]\nName=Fallback map\n");
-    var h = new byte[1072 + extraHeaderBytes];
+    var h = new byte[1084 + extraHeaderBytes];
     Put(h, 0, 0x50525259); Put(h, 4, 1); Put(h, 8, (uint)h.Length);
     Put(h, 12, 5); Put(h, 16, 777); Put(h, 20, unchecked((uint)-123456));
     Put(h, 24, 7); Put(h, 28, 249);
@@ -534,7 +731,7 @@ static byte[] Fixture(byte[] raw, int extraHeaderBytes = 0, string? ini = null,
     Put(h, 1032, (uint)spawn.Length); Put(h, 1036, (uint)spawnmap.Length); Put(h, 1040, 2);
     BinaryPrimitives.WriteUInt64LittleEndian(h.AsSpan(1044), 1_800_000_000ul);
     Put(h, 1052, 120); Put(h, 1056, 1);
-    h.AsSpan(1072).Fill(0xFF);
+    if (h.Length > 1084) h.AsSpan(1084).Fill(0xFF);
     using var file = new MemoryStream();
     file.Write(h); file.Write(spawn); file.Write(spawnmap);
     using (var deflate = new DeflateStream(file, CompressionLevel.Optimal, leaveOpen: true))
@@ -546,12 +743,21 @@ static byte[] Fixture(byte[] raw, int extraHeaderBytes = 0, string? ini = null,
             return file.ToArray(); // Snapshot before disposal writes the final deflate block.
         }
     }
-    if (archive is null) return file.ToArray();
-    // Appended after the finished stream, then stamped into the header, as FinishRecordingCheckpoints does.
+    // Appended after the finished stream, then stamped into the header, as the recorder does.
     long archiveOffset = file.Length;
-    file.Write(archive);
+    if (archive is not null) file.Write(archive);
+    long statisticsOffset = file.Length;
+    if (statistics is not null) file.Write(statistics);
     var bytes = file.ToArray();
-    BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(1060), (ulong)archiveOffset);
-    Put(bytes, 1068, (uint)archive.Length);
+    if (archive is not null)
+    {
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(1060), (ulong)archiveOffset);
+        Put(bytes, 1068, (uint)archive.Length);
+    }
+    if (statistics is not null)
+    {
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(1072), (ulong)statisticsOffset);
+        Put(bytes, 1080, (uint)statistics.Length);
+    }
     return bytes;
 }

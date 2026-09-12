@@ -31,6 +31,11 @@ public sealed class ReplayDocument
     /// <summary>Saves the recording embedded as seek points, in frame order.</summary>
     public List<RecordedCheckpoint> Checkpoints { get; set; } = [];
 
+    /// <summary>The statistics section: type table, end-of-game house records, the game's own packet.</summary>
+    public ReplayStatistics? Statistics { get; set; }
+
+    public int HouseStatsFrameCount => Frames.Count(f => f.HouseStats is not null);
+
     public string CheckpointSummary
     {
         get

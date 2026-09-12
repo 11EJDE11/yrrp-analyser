@@ -11,7 +11,7 @@ public static class ReplayFormat
     public const uint Version = 1;
     public const uint MinSupportedVersion = 1;
 
-    public const int HeaderSize = 1072;             // sizeof(ReplayHeader)
+    public const int HeaderSize = 1084;             // sizeof(ReplayHeader)
     public const int FrameRecordHeaderSize = 12;
     public const int FrameObjectCensusSize = 8;
     public const int FrameRandomStateSize = 8;
@@ -37,6 +37,24 @@ public static class ReplayFormat
     public const uint MaxCheckpointPayloadBytes = 32u * 1024u * 1024u;
     public const int MaxRecordedCheckpoints = 4;
 
+    // Statistics: the per-frame HouseStats block and the statistics section after the frame stream.
+    public const int HouseStatsSampleSize = 112;           // sizeof(HouseStatsSample)
+    public const int MaxHouseStatsPerFrame = 32;
+    public const int HouseStatsIntervalFrames = 60;
+    public const uint MaxStatisticsSectionBytes = 8u * 1024u * 1024u;
+    public const int StatisticsHouseRecordSize = 310;      // sizeof(StatisticsHouseRecord)
+    public const int StatisticsGameRecordSize = 20;        // sizeof(StatisticsGameRecord)
+    public const int IncomeSourceCount = 7;
+
+    /// <summary>A four-character chunk tag as MakeChunkTag packs it: first character in the low byte.</summary>
+    public static uint ChunkTag(string tag) =>
+        (uint)(tag[0] | tag[1] << 8 | tag[2] << 16 | tag[3] << 24);
+
+    public static readonly uint ChunkTypes = ChunkTag("TYPE");
+    public static readonly uint ChunkHouses = ChunkTag("HOUS");
+    public static readonly uint ChunkStatsPacket = ChunkTag("STAT");
+    public static readonly uint ChunkGame = ChunkTag("GAME");
+
     /// <summary>The spawner sync-flushes the deflate stream this often, bounding crash loss.</summary>
     public const int SyncFlushFrameInterval = 60;
 
@@ -60,6 +78,8 @@ public static class ReplayFormat
     public const int OffsetFlags = 1056;
     public const int OffsetCheckpointArchiveOffset = 1060;  // uint64
     public const int OffsetCheckpointArchiveSize = 1068;
+    public const int OffsetStatisticsOffset = 1072;         // uint64
+    public const int OffsetStatisticsSize = 1080;
 
     /// <summary>
     /// Vanilla Queue_AI_Multiplayer mapping, duplicated in ReplayFormat.h and in the client's
@@ -108,8 +128,11 @@ public enum FrameRecordFlags : uint
     /// <summary>A positive int32 count followed by selection-trigger object unique IDs.</summary>
     SelectionTriggers = 1u << 8,
 
+    /// <summary>A positive int32 count followed by that many 84-byte HouseStatsSample records.</summary>
+    HouseStats = 1u << 9,
+
     Known = TacticalPos | Selection | SideChannel | GameCrc | Extensions
-            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers,
+            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers | HouseStats,
 }
 
 public enum SideChannelEventType : byte

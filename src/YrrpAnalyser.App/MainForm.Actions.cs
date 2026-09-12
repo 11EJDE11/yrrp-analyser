@@ -40,6 +40,9 @@ internal sealed partial class MainForm
         sb.AppendLine($"  checkpoint archive  " + (doc.Header.HasCheckpointArchive
             ? $"{doc.Header.CheckpointArchiveSize:N0} bytes at offset {doc.Header.CheckpointArchiveOffset:N0}"
             : "none"));
+        sb.AppendLine($"  statistics section  " + (doc.Header.HasStatisticsSection
+            ? $"{doc.Header.StatisticsSize:N0} bytes at offset {doc.Header.StatisticsOffset:N0}"
+            : "none"));
         sb.AppendLine($"  end-of-stream mark  {(doc.SawEndOfStream ? "present" : "MISSING")}");
         sb.AppendLine($"  truncated           {(doc.Truncated ? "yes" : "no")}");
         sb.AppendLine($"  clean shutdown flag {(doc.Header.CleanShutdown ? "set" : "CLEAR")}");
@@ -61,6 +64,7 @@ internal sealed partial class MainForm
         sb.AppendLine($"  object censuses     {doc.CensusFrameCount:N0}");
         sb.AppendLine($"  RNG cursor snapshots {doc.Frames.Count(f => f.RandomState.HasValue):N0}");
         sb.AppendLine($"  selection triggers  {doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)):N0}");
+        sb.AppendLine($"  house stat samples  {doc.HouseStatsFrameCount:N0} frames");
         sb.AppendLine($"  game speed changes  {doc.GameSpeed.Changes.Count():N0}");
         sb.AppendLine($"  bytes per frame     {(doc.Frames.Count > 0 ? doc.InflatedStreamBytes / (double)doc.Frames.Count : 0):0.0} " +
                       "uncompressed");
@@ -73,7 +77,7 @@ internal sealed partial class MainForm
 
         sb.AppendLine("RECORD FLAG COMBINATIONS");
         sb.AppendLine("  Blocks are stored bare and in write order: TacticalPos, Selection, SideChannel,");
-        sb.AppendLine("  GameCRC, ObjectCensus, RandomState, GameSpeed, SelectionTriggers, Extensions.");
+        sb.AppendLine("  GameCRC, ObjectCensus, RandomState, GameSpeed, SelectionTriggers, HouseStats, Extensions.");
         sb.AppendLine("  Gameplay events follow those blocks; this is not numeric flag-bit order.");
         foreach (var group in flagCounts)
             sb.AppendLine($"  0x{group.Key:X2}  {DescribeFlags(group.Key),-52} {group.Count(),8:N0}");
@@ -105,6 +109,7 @@ internal sealed partial class MainForm
                       $"({doc.Header.RecordedAt.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC)");
         sb.AppendLine($"  Flags               0x{doc.Header.Flags:X8}");
         sb.AppendLine($"  CheckpointArchive   offset {doc.Header.CheckpointArchiveOffset}, size {doc.Header.CheckpointArchiveSize}");
+        sb.AppendLine($"  Statistics          offset {doc.Header.StatisticsOffset}, size {doc.Header.StatisticsSize}");
         sb.AppendLine();
 
         if (doc.Checkpoints.Count > 0)
@@ -168,6 +173,7 @@ internal sealed partial class MainForm
         if ((flags & (uint)FrameRecordFlags.RandomState) != 0) parts.Add("RandomState");
         if ((flags & (uint)FrameRecordFlags.GameSpeed) != 0) parts.Add("GameSpeed");
         if ((flags & (uint)FrameRecordFlags.SelectionTriggers) != 0) parts.Add("SelectionTriggers");
+        if ((flags & (uint)FrameRecordFlags.HouseStats) != 0) parts.Add("HouseStats");
         if ((flags & (uint)FrameRecordFlags.Extensions) != 0) parts.Add("Extensions");
         uint unknown = flags & ~(uint)FrameRecordFlags.Known;
         if (unknown != 0) parts.Add($"unknown 0x{unknown:X}");
@@ -304,8 +310,11 @@ internal sealed partial class MainForm
             Exporters.WriteNetworkCsv($"{stem}.network.csv", doc, _network);
             Exporters.WriteFrameCrcCsv($"{stem}.frames.csv", doc);
             Exporters.WriteSummaryJson($"{stem}.summary.json", doc, _network, _activity);
+            Exporters.WriteHouseStatsCsv($"{stem}.house-stats.csv", doc);
             File.WriteAllText($"{stem}.spawn.ini", doc.SpawnIniText);
             File.WriteAllText($"{stem}.spawnmap.ini", doc.SpawnMapText);
-        }, $"7 files to {dir}");
+            if (doc.Statistics?.StatsPacketBytes is { } packet)
+                File.WriteAllBytes($"{stem}.stats.dmp", packet);
+        }, $"the exports to {dir}");
     }
 }

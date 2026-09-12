@@ -99,6 +99,101 @@ public static class Exporters
         }
     }
 
+    public static void WriteHouseStatsCsv(string path, ReplayDocument doc)
+    {
+        using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
+        writer.WriteLine("Frame,Time,HouseIndex,Player,Credits,StoredOreValue,CreditsSpent,HarvestedCredits," +
+                         "PowerOutput,PowerDrain,Units,Infantry,Aircraft,Buildings,ArmyValue,BuildingValue," +
+                         "UnitsKilled,BuildingsKilled,UnitsLost,BuildingsLost,UnitsBuilt,BuildingsBuilt,Score," +
+                         "IncomeHarvested,IncomeBuildings,IncomeSold,IncomeRefunded,IncomeCrates,IncomeStolen,IncomeOther,Flags");
+
+        foreach (var f in doc.Frames)
+        {
+            if (f.HouseStats is null) continue;
+            foreach (var s in f.HouseStats)
+            {
+                writer.WriteLine(string.Join(',',
+                    f.FrameNumber,
+                    Csv(doc.TimeLabel(f.FrameNumber)),
+                    s.HouseIndex,
+                    Csv(StatisticsAnalysis.HouseName(doc, s.HouseIndex)),
+                    s.Credits, s.StoredOreValue, s.CreditsSpent, s.HarvestedCredits,
+                    s.PowerOutput, s.PowerDrain, s.Units, s.Infantry, s.Aircraft, s.Buildings,
+                    s.ArmyValue, s.BuildingValue, s.UnitsKilled, s.BuildingsKilled, s.UnitsLost, s.BuildingsLost,
+                    s.UnitsBuilt, s.BuildingsBuilt, s.Score,
+                    s.IncomeHarvested, s.IncomeBuildings, s.IncomeSold, s.IncomeRefunded, s.IncomeCrates,
+                    s.IncomeStolen, s.IncomeOther,
+                    Csv(s.Flags.ToString())));
+            }
+        }
+    }
+
+    /// <summary>A count array keyed by type ID, for the JSON summary.</summary>
+    private static Dictionary<string, int> NamedCounts(ReplayStatistics stats, HouseSummary house, StatisticsArray which)
+    {
+        var kind = HouseSummary.KindOf(which);
+        var counts = house.Array(which);
+        var named = new Dictionary<string, int>();
+        for (int i = 0; i < counts.Length; i++)
+        {
+            if (counts[i] == 0) continue;
+            string key = stats.Types.Get(kind, i)?.Id ?? $"#{i}";
+            named[key] = named.GetValueOrDefault(key) + counts[i];
+        }
+        return named;
+    }
+
+    private static object? StatisticsSummary(ReplayDocument doc)
+    {
+        var analysis = StatisticsAnalysis.Build(doc);
+        var stats = doc.Statistics;
+        if (!analysis.HasTimeline && stats is null) return null;
+
+        return new
+        {
+            timelineSamples = doc.HouseStatsFrameCount,
+            sampleIntervalFrames = ReplayFormat.HouseStatsIntervalFrames,
+            timeline = analysis.Houses.Select(t => new
+            {
+                houseIndex = t.HouseIndex,
+                name = t.Name,
+                totalIncome = t.TotalIncome,
+                peakIncomePerMinute = Math.Round(t.PeakIncomeRate),
+                peakArmyValue = t.PeakArmyValue,
+                peakArmySize = t.PeakArmySize,
+                defeatedAtFrame = t.DefeatedAtFrame,
+                last = t.Last,
+            }),
+            houses = stats?.Houses.Select(h => new
+            {
+                houseIndex = h.HouseIndex,
+                name = h.Name,
+                country = h.Country,
+                flags = h.Flags.ToString(),
+                credits = h.Credits,
+                storedOreValue = h.StoredOreValue,
+                creditsSpent = h.CreditsSpent,
+                harvestedCredits = h.HarvestedCredits,
+                unitsKilled = h.UnitsKilled,
+                buildingsKilled = h.BuildingsKilled,
+                unitsLost = h.UnitsLost,
+                buildingsLost = h.BuildingsLost,
+                score = h.Score,
+                unitsKilledOfHouse = h.UnitsKilledOfHouse,
+                buildingsKilledOfHouse = h.BuildingsKilledOfHouse,
+                income = Enum.GetValues<IncomeSource>().ToDictionary(s => s.ToString(), h.IncomeFrom),
+                counts = Enum.GetValues<StatisticsArray>().ToDictionary(a => a.ToString(), a => NamedCounts(stats, h, a)),
+            }),
+            game = stats?.Game,
+            statsPacket = stats?.StatsPacket?.Fields.Select(f => new
+            {
+                tag = f.Tag,
+                meaning = StatsDump.Meaning(f.Key),
+                value = f.DisplayValue,
+            }),
+        };
+    }
+
     public static void WriteSummaryJson(string path, ReplayDocument doc, NetworkAnalysis network,
         ActivityAnalysis activity)
     {
@@ -121,7 +216,10 @@ public static class Exporters
                 hasEmbeddedMap = doc.HasEmbeddedMap,
                 checkpointArchiveOffset = doc.Header.CheckpointArchiveOffset,
                 checkpointArchiveSize = doc.Header.CheckpointArchiveSize,
+                statisticsOffset = doc.Header.StatisticsOffset,
+                statisticsSize = doc.Header.StatisticsSize,
             },
+            statistics = StatisticsSummary(doc),
             checkpoints = doc.Checkpoints.Select(c => new
             {
                 frame = c.Frame,

@@ -95,13 +95,18 @@ public static class ReplayReader
         var spawnMapBytes = new byte[header.SpawnMapSize];
         file.ReadExactly(spawnMapBytes);
 
-        // Bounds are only checked in full by CheckpointArchiveReader; this is just where the frame
-        // stream's byte count stops.
-        long streamEnd = header.HasCheckpointArchive
-                         && header.CheckpointArchiveOffset > (ulong)streamOffset
-                         && header.CheckpointArchiveOffset <= (ulong)file.Length
-            ? (long)header.CheckpointArchiveOffset
-            : file.Length;
+        // Bounds are only checked in full by the section readers; this is just where the frame
+        // stream's byte count stops - at whichever trailing section comes first.
+        long streamEnd = file.Length;
+        foreach (var (present, sectionOffset) in new[]
+                 {
+                     (header.HasCheckpointArchive, header.CheckpointArchiveOffset),
+                     (header.HasStatisticsSection, header.StatisticsOffset),
+                 })
+        {
+            if (present && sectionOffset > (ulong)streamOffset && sectionOffset <= (ulong)file.Length)
+                streamEnd = Math.Min(streamEnd, (long)sectionOffset);
+        }
 
         var doc = new ReplayDocument
         {
@@ -120,6 +125,10 @@ public static class ReplayReader
         if (header.HasCheckpointArchive)
             progress?.Report("Reading checkpoint archive...");
         doc.Checkpoints = CheckpointArchiveReader.Read(file, header, streamOffset, doc.Warnings);
+
+        if (header.HasStatisticsSection)
+            progress?.Report("Reading statistics...");
+        doc.Statistics = StatisticsSectionReader.Read(file, header, streamOffset, doc.Warnings);
 
         doc.GameSpeed = GameSpeedTrack.Build(doc.Header, doc.Frames);
         doc.CensusFrameCount = doc.Frames.Count(f => f.Census.HasValue);
@@ -164,6 +173,8 @@ public static class ReplayReader
             Flags = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetFlags)),
             CheckpointArchiveOffset = BinaryPrimitives.ReadUInt64LittleEndian(h.AsSpan(ReplayFormat.OffsetCheckpointArchiveOffset)),
             CheckpointArchiveSize = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetCheckpointArchiveSize)),
+            StatisticsOffset = BinaryPrimitives.ReadUInt64LittleEndian(h.AsSpan(ReplayFormat.OffsetStatisticsOffset)),
+            StatisticsSize = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetStatisticsSize)),
         };
     }
 
@@ -279,8 +290,8 @@ public static class ReplayReader
                     record.GameCrc = BinaryPrimitives.ReadUInt32LittleEndian(cb);
                 }
 
-                // ReplayFrameCodec.cpp reads census, RNG, speed, selection triggers, then
-                // extensions before gameplay events. This is not numeric flag-bit order.
+                // ReplayFrameCodec.cpp reads census, RNG, speed, selection triggers, house stats,
+                // then extensions before gameplay events. This is not numeric flag-bit order.
                 // Census and RNG blocks are still readable but no longer written.
                 if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0)
                 {
@@ -326,6 +337,24 @@ public static class ReplayReader
                     record.SelectionTriggerIds = new uint[count];
                     for (int i = 0; i < count; i++)
                         record.SelectionTriggerIds[i] = BinaryPrimitives.ReadUInt32LittleEndian(ids[(i * 4)..]);
+                }
+
+                if ((flags & (uint)FrameRecordFlags.HouseStats) != 0)
+                {
+                    if (!reader.TryRead(4, out var hc)) { doc.Truncated = true; break; }
+                    int count = BinaryPrimitives.ReadInt32LittleEndian(hc);
+                    if (count <= 0 || count > ReplayFormat.MaxHouseStatsPerFrame)
+                    {
+                        doc.Warnings.Add($"Frame {frameNumber} claims {count} house statistics samples, " +
+                                         $"outside 1..{ReplayFormat.MaxHouseStatsPerFrame}; stopped reading here.");
+                        break;
+                    }
+                    if (!reader.TryRead(count * ReplayFormat.HouseStatsSampleSize, out var hb))
+                    { doc.Truncated = true; break; }
+                    record.HouseStats = new HouseStatsSample[count];
+                    for (int i = 0; i < count; i++)
+                        record.HouseStats[i] = ParseHouseStats(hb.Slice(i * ReplayFormat.HouseStatsSampleSize,
+                            ReplayFormat.HouseStatsSampleSize));
                 }
 
                 if ((flags & (uint)FrameRecordFlags.Extensions) != 0)
@@ -378,6 +407,18 @@ public static class ReplayReader
 
         if (!doc.SawEndOfStream && !doc.Truncated)
             doc.Warnings.Add("The frame stream ended without an end-of-stream marker.");
+    }
+
+    private static HouseStatsSample ParseHouseStats(ReadOnlySpan<byte> r)
+    {
+        var f = new int[28];
+        for (int i = 0; i < f.Length; i++)
+            f[i] = BinaryPrimitives.ReadInt32LittleEndian(r[(i * 4)..]);
+        return new HouseStatsSample(
+            f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10],
+            f[11], f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19],
+            f[20], f[21], f[22], f[23], f[24], f[25], f[26],
+            (HouseStatsFlags)(uint)f[27]);
     }
 
     private static SideChannelEvent ParseSideChannel(ReadOnlySpan<byte> r)

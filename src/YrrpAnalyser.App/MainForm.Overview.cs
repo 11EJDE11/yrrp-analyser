@@ -65,6 +65,11 @@ internal sealed partial class MainForm
             ("Frame stream", $"{doc.CompressedStreamBytes:N0} → {doc.InflatedStreamBytes:N0} bytes " +
                              $"({doc.CompressionRatio:0.0}x)"),
             ("Checkpoints", doc.CheckpointSummary),
+            ("Statistics", doc.HouseStatsFrameCount > 0 || doc.Statistics is not null
+                ? $"{doc.HouseStatsFrameCount:N0} timeline samples" +
+                  (doc.Statistics is { } s ? $", {s.Houses.Count} house records" +
+                                             (s.StatsPacket is not null ? ", the game's packet" : "") : "")
+                : "none"),
         ]);
 
         yield return SectionHeading("Lobby");

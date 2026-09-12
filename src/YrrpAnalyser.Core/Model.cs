@@ -24,6 +24,12 @@ public sealed class ReplayHeaderInfo
     public ulong CheckpointArchiveOffset { get; init; }
     public uint CheckpointArchiveSize { get; init; }
 
+    /// <summary>Absolute file offset of the statistics section; 0 when there is none, or the header predates it.</summary>
+    public ulong StatisticsOffset { get; init; }
+    public uint StatisticsSize { get; init; }
+
+    public bool HasStatisticsSection => StatisticsOffset != 0 || StatisticsSize != 0;
+
     public bool CleanShutdown => (Flags & (uint)ReplayHeaderFlags.CleanShutdown) != 0;
 
     /// <summary>
@@ -76,6 +82,88 @@ public readonly record struct FrameObjectCensus(int AbstractCount, int ScenarioU
 public readonly record struct FrameRandomState(int Next1, int Next2);
 
 /// <summary>
+/// Where money reached a house, told apart by the call site that handed it to Refund_Money. Mirrors
+/// IncomeSource in ReplayFormat.h.
+/// </summary>
+public enum IncomeSource
+{
+    Harvested,
+    Buildings,
+    Sold,
+    Refunded,
+    Crates,
+    Stolen,
+    Other,
+}
+
+[Flags]
+public enum HouseStatsFlags : uint
+{
+    None = 0,
+    Defeated = 1u << 0,
+    Winner = 1u << 1,
+    Loser = 1u << 2,
+    Observer = 1u << 3,
+    Human = 1u << 4,
+    LostConnection = 1u << 5,
+    Resigned = 1u << 6,
+    RecordingPlayer = 1u << 7,
+}
+
+/// <summary>
+/// One house's economy and army at a sampled frame, mirroring HouseStatsSample in ReplayFormat.h.
+/// Every field is a plain read of the engine's own house state at the frame's hash site.
+/// </summary>
+public readonly record struct HouseStatsSample(
+    int HouseIndex,
+    int Credits,
+    int StoredOreValue,
+    int CreditsSpent,
+    int HarvestedCredits,
+    int PowerOutput,
+    int PowerDrain,
+    int Units,
+    int Infantry,
+    int Aircraft,
+    int Buildings,
+    int ArmyValue,
+    int BuildingValue,
+    int UnitsKilled,
+    int BuildingsKilled,
+    int UnitsLost,
+    int BuildingsLost,
+    int UnitsBuilt,
+    int BuildingsBuilt,
+    int Score,
+    int IncomeHarvested,
+    int IncomeBuildings,
+    int IncomeSold,
+    int IncomeRefunded,
+    int IncomeCrates,
+    int IncomeStolen,
+    int IncomeOther,
+    HouseStatsFlags Flags)
+{
+    /// <summary>Cumulative income from one source, counted by the recorder at HouseClass::Refund_Money.</summary>
+    public int Income(IncomeSource source) => source switch
+    {
+        IncomeSource.Harvested => IncomeHarvested,
+        IncomeSource.Buildings => IncomeBuildings,
+        IncomeSource.Sold => IncomeSold,
+        IncomeSource.Refunded => IncomeRefunded,
+        IncomeSource.Crates => IncomeCrates,
+        IncomeSource.Stolen => IncomeStolen,
+        _ => IncomeOther,
+    };
+
+    /// <summary>What the sidebar shows: cash plus the value of ore waiting in refineries and silos.</summary>
+    public int CreditsOnHand => Credits + StoredOreValue;
+
+    /// <summary>Vehicles (ships included), infantry and aircraft.</summary>
+    public int ArmyCount => Units + Infantry + Aircraft;
+}
+
+/// <summary>
 /// One frame's record. Blocks are present only when the matching flag is set; the writer omits
 /// a block whose value has not changed since the last written frame.
 /// </summary>
@@ -91,6 +179,7 @@ public sealed class FrameRecord
     public FrameRandomState? RandomState;
     public int? GameSpeed;
     public uint[]? SelectionTriggerIds;
+    public HouseStatsSample[]? HouseStats;
     public byte[]? Extension;
 
     /// <summary>Index of this frame's first event in <see cref="ReplayDocument.Events"/>.</summary>

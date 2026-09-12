@@ -51,12 +51,13 @@ public static class CheckpointArchiveReader
         uint size = header.CheckpointArchiveSize;
         ulong fileLength = (ulong)file.Length;
 
-        // The archive runs from just past the frame stream to EOF, exactly.
+        // The archive starts after the frame stream and has to fit in the file; the statistics
+        // section may follow it.
         if (size == 0 || size > ReplayFormat.MaxCheckpointArchiveBytes
-            || offset <= (ulong)streamOffset || offset > fileLength || size != fileLength - offset)
+            || offset <= (ulong)streamOffset || offset > fileLength || size > fileLength - offset)
         {
             warnings.Add($"The header points at a {size:N0}-byte checkpoint archive at offset {offset:N0}, " +
-                         "which does not run from the end of the frame stream to the end of the file. " +
+                         "which does not fit in the file after the frame stream. " +
                          "Playback ignores it and plays without the embedded saves.");
             return [];
         }
@@ -150,9 +151,29 @@ public static class CheckpointArchiveReader
         return result;
     }
 
-    private static void InspectPayload(RecordedCheckpoint checkpoint, ArraySegment<byte> compressed)
+    /// <summary>
+    /// The checkpoint's savegame, byte for byte as the game wrote it to its Saved Games folder -
+    /// the payload's leading part, without the replay's own sidecar.
+    /// </summary>
+    public static byte[] ExtractSave(string replayPath, RecordedCheckpoint checkpoint)
     {
-        var raw = new byte[checkpoint.RawSize];
+        if (!checkpoint.Usable)
+            throw new InvalidOperationException($"The checkpoint at frame {checkpoint.Frame} cannot be used: {checkpoint.Problem}.");
+
+        using var file = new FileStream(replayPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var compressed = new byte[checkpoint.CompressedSize];
+        file.Position = checkpoint.CompressedOffset;
+        file.ReadExactly(compressed);
+
+        var raw = Inflate(compressed, checkpoint.RawSize, out var problem)
+                  ?? throw new InvalidDataException($"The checkpoint at frame {checkpoint.Frame} {problem}.");
+        return raw.AsSpan(4, (int)checkpoint.SaveBytes).ToArray();
+    }
+
+    private static byte[]? Inflate(ArraySegment<byte> compressed, uint rawSize, out string? problem)
+    {
+        problem = null;
+        var raw = new byte[rawSize];
         try
         {
             using var inflate = new DeflateStream(
@@ -167,18 +188,29 @@ public static class CheckpointArchiveReader
             }
             if (got != raw.Length)
             {
-                checkpoint.Problem = $"inflates to {got:N0} bytes, not the {raw.Length:N0} its index claims";
-                return;
+                problem = $"inflates to {got:N0} bytes, not the {raw.Length:N0} its index claims";
+                return null;
             }
             if (inflate.ReadByte() >= 0)
             {
-                checkpoint.Problem = $"inflates to more than the {raw.Length:N0} bytes its index claims";
-                return;
+                problem = $"inflates to more than the {raw.Length:N0} bytes its index claims";
+                return null;
             }
         }
         catch (InvalidDataException)
         {
-            checkpoint.Problem = "the compressed payload is corrupt";
+            problem = "has a corrupt compressed payload";
+            return null;
+        }
+        return raw;
+    }
+
+    private static void InspectPayload(RecordedCheckpoint checkpoint, ArraySegment<byte> compressed)
+    {
+        var raw = Inflate(compressed, checkpoint.RawSize, out var inflateProblem);
+        if (raw is null)
+        {
+            checkpoint.Problem = inflateProblem;
             return;
         }
 

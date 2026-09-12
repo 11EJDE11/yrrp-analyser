@@ -13,6 +13,7 @@ if (args.Length == 0)
           yrrp --compare <a.yrrp> <b.yrrp>       compare two peers' recordings of one game
           yrrp --scan <folder>                   one line per replay in a folder
           yrrp --export <replay.yrrp> <outdir>   write every CSV/JSON export
+          yrrp --saves <replay.yrrp> [outdir]    list the embedded saves, or write them out as .SAV
         """);
     return 0;
 }
@@ -24,6 +25,7 @@ try
         case "--compare" when args.Length >= 3: return Compare(args[1], args[2]);
         case "--scan" when args.Length >= 2: return Scan(args[1]);
         case "--export" when args.Length >= 3: return Export(args[1], args[2]);
+        case "--saves" when args.Length >= 2: return Saves(args[1], args.Length >= 3 ? args[2] : null);
         default: return Report(args);
     }
 }
@@ -41,7 +43,7 @@ catch (Exception ex)
 static (ReplayDocument Doc, EventDescriber Describer) Load(string path, string[] rulesPaths)
 {
     var doc = ReplayReader.Load(path);
-    var types = TypeNameResolver.Load(rulesPaths, doc.SpawnMapIni);
+    var types = TypeNameResolver.ForDocument(doc, rulesPaths);
     return (doc, new EventDescriber(types));
 }
 
@@ -117,6 +119,26 @@ static int Report(string[] args)
         Console.WriteLine($"  {a.Name,-22} {a.TotalOrders,7:N0} orders  {a.TotalCommands,6:N0} commands  " +
                           $"avg {a.AverageApm,5:0.0} APM  peak {a.PeakApm,5:0.0}  " +
                           $"last action frame {a.LastActionFrame:N0}");
+
+    var statistics = StatisticsAnalysis.Build(doc);
+    if (statistics.HasTimeline || doc.Statistics is not null)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Statistics  ({doc.HouseStatsFrameCount:N0} timeline samples" +
+                          (doc.Statistics?.StatsPacket is not null ? ", plus the game's own packet" : "") + ")");
+        Console.WriteLine("  player                  money left     income      spent  peak army  units b/k/l          bldgs b/k/l      score");
+        foreach (var t in statistics.Houses)
+        {
+            var s = t.Last;
+            var summary = doc.Statistics?.ForHouse(t.HouseIndex);
+            string result = (s.Flags & HouseStatsFlags.Winner) != 0 ? "won"
+                : t.DefeatedAtFrame is { } f ? $"defeated {doc.TimeLabel(f)}" : "";
+            Console.WriteLine($"  {t.Name,-22} {s.CreditsOnHand,11:N0} {t.TotalIncome,10:N0} {s.CreditsSpent,10:N0} " +
+                              $"{t.PeakArmyValue,10:N0}  {s.UnitsBuilt,5}/{s.UnitsKilled,5}/{s.UnitsLost,-5}   " +
+                              $"{s.BuildingsBuilt,4}/{s.BuildingsKilled,4}/{s.BuildingsLost,-4} {s.Score,8:N0}  {result}" +
+                              (summary is null ? "" : $"  {summary.Country}"));
+        }
+    }
 
     Console.WriteLine();
     Console.WriteLine("Event totals");
@@ -251,9 +273,34 @@ static int Export(string path, string outDir)
     Exporters.WriteNetworkCsv($"{stem}.network.csv", doc, network);
     Exporters.WriteFrameCrcCsv($"{stem}.frames.csv", doc);
     Exporters.WriteSummaryJson($"{stem}.summary.json", doc, network, activity);
+    Exporters.WriteHouseStatsCsv($"{stem}.house-stats.csv", doc);
     File.WriteAllText($"{stem}.spawn.ini", doc.SpawnIniText);
     File.WriteAllText($"{stem}.spawnmap.ini", doc.SpawnMapText);
+    if (doc.Statistics?.StatsPacketBytes is { } packet)
+        File.WriteAllBytes($"{stem}.stats.dmp", packet);
 
-    Console.WriteLine($"Wrote 7 files to {outDir}");
+    Console.WriteLine($"Wrote the exports to {outDir}");
+    return 0;
+}
+
+static int Saves(string path, string? outDir)
+{
+    var doc = ReplayReader.Load(path);
+    Console.WriteLine($"{doc.FileName}: {doc.CheckpointSummary}");
+    foreach (var c in doc.Checkpoints)
+        Console.WriteLine($"  frame {c.Frame,8:N0}  {doc.TimeLabel(c.Frame),8}  save {c.SaveBytes,11:N0} bytes  " +
+                          $"sidecar {c.SidecarBytes,9:N0} bytes  {c.Problem ?? "ok"}");
+
+    if (outDir is null) return 0;
+
+    Directory.CreateDirectory(outDir);
+    int written = 0;
+    foreach (var c in doc.Checkpoints.Where(c => c.Usable))
+    {
+        string target = Path.Combine(outDir, $"{Path.GetFileNameWithoutExtension(path)} - frame {c.Frame}.SAV");
+        File.WriteAllBytes(target, CheckpointArchiveReader.ExtractSave(path, c));
+        written++;
+    }
+    Console.WriteLine($"Wrote {written} save(s) to {outDir}");
     return 0;
 }

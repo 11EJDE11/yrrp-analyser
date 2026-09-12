@@ -95,6 +95,17 @@ internal sealed partial class MainForm
         BackColor = Theme.Background,
     };
 
+    private readonly FlowLayoutPanel _statisticsFlow = new()
+    {
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        FlowDirection = FlowDirection.TopDown,
+        WrapContents = false,
+        Padding = new Padding(16, 12, 16, 24),
+        BackColor = Theme.Background,
+    };
+
     private readonly TextBox _spawnIniBox = MakeCodeBox();
     private readonly TextBox _spawnMapBox = MakeCodeBox();
     private readonly TextBox _diagnosticsBox = MakeCodeBox();
@@ -104,21 +115,24 @@ internal sealed partial class MainForm
 
     private readonly ChartGroup _networkCharts = new();
     private readonly ChartGroup _activityCharts = new();
+    private readonly ChartGroup _statisticsCharts = new();
 
     private void BuildTabs()
     {
         _tabs.Padding = new Point(14, 6);
 
-        foreach (var flow in new[] { _overviewFlow, _networkFlow, _activityFlow })
+        foreach (var flow in new[] { _overviewFlow, _networkFlow, _activityFlow, _statisticsFlow })
         {
             var captured = flow;
             captured.SizeChanged += (_, _) => FitWidths(captured);
         }
 
         _tabs.TabPages.Add(NewPage("Overview", Scrollable(_overviewFlow)));
+        _tabs.TabPages.Add(NewPage("Statistics", Scrollable(_statisticsFlow)));
         _tabs.TabPages.Add(NewPage("Events", BuildEventsTab()));
         _tabs.TabPages.Add(NewPage("Network", Scrollable(_networkFlow)));
         _tabs.TabPages.Add(NewPage("Activity", Scrollable(_activityFlow)));
+        _tabs.TabPages.Add(NewPage("Saves", BuildSavesTab()));
         _tabs.TabPages.Add(NewPage("spawn.ini", BuildIniTab(_spawnIniBox, _spawnIniSearch,
             "The launch spawn.ini embedded verbatim by the recorder, including player names, " +
             "sides, colours, game options and the client's file hashes.")));

@@ -72,6 +72,36 @@ public sealed class TypeNameResolver
         return resolver;
     }
 
+    /// <summary>
+    /// Names for a document: the recording's own type table where it has one - the exact arrays the
+    /// game ran with, named as the game showed them, so no rules file is needed - with any rules INIs
+    /// still supplying what the table does not cover (superweapons, countries).
+    /// </summary>
+    public static TypeNameResolver ForDocument(ReplayDocument doc, IEnumerable<string> rulesPaths)
+    {
+        var resolver = Load(rulesPaths, doc.SpawnMapIni);
+        if (doc.Statistics?.Types is not { HasData: true } table)
+            return resolver;
+
+        foreach (var kind in new[] { AbstractType.BuildingType, AbstractType.InfantryType,
+                                     AbstractType.UnitType, AbstractType.AircraftType })
+        {
+            var types = table.Of(kind);
+            if (types.Count == 0) continue;
+            resolver._lists[kind] = types.Select(t => t.Id).ToList();
+            foreach (var type in types)
+            {
+                if (type.DisplayName != type.Id)
+                    resolver._displayNames[type.Id] = type.DisplayName;
+            }
+        }
+
+        resolver.SourceDescription = resolver.SourceDescription == "none loaded"
+            ? "the recording's own type table"
+            : $"the recording's own type table (+ {resolver.SourceDescription})";
+        return resolver;
+    }
+
     private void Merge(IniDocument ini)
     {
         foreach (var (kind, sectionName) in TypeSections)

@@ -74,6 +74,10 @@ internal sealed partial class MainForm : Form
         export.DropDownItems.Add(new ToolStripMenuItem("Per-frame CRCs as CSV...", null, (_, _) => ExportCrcCsv()));
         export.DropDownItems.Add(new ToolStripMenuItem("Summary as JSON...", null, (_, _) => ExportSummaryJson()));
         export.DropDownItems.Add(new ToolStripSeparator());
+        export.DropDownItems.Add(new ToolStripMenuItem("House statistics timeline as CSV...", null, (_, _) => ExportHouseStatsCsv()));
+        export.DropDownItems.Add(new ToolStripMenuItem("The game's statistics packet (stats.dmp)...", null, (_, _) => ExportStatsPacket()));
+        export.DropDownItems.Add(new ToolStripMenuItem("Embedded saves to a folder...", null, (_, _) => SaveAllCheckpoints()));
+        export.DropDownItems.Add(new ToolStripSeparator());
         export.DropDownItems.Add(new ToolStripMenuItem("Embedded spawn.ini...", null, (_, _) => ExportIni(false)));
         export.DropDownItems.Add(new ToolStripMenuItem("Embedded spawnmap.ini...", null, (_, _) => ExportIni(true)));
         file.DropDownItems.Add(export);
@@ -151,7 +155,9 @@ internal sealed partial class MainForm : Form
 
     private void ReloadTypeNames()
     {
-        _types = TypeNameResolver.Load(_settings.RulesIniPaths, _doc?.SpawnMapIni);
+        _types = _doc is { } doc
+            ? TypeNameResolver.ForDocument(doc, _settings.RulesIniPaths)
+            : TypeNameResolver.Load(_settings.RulesIniPaths, null);
         _describer = new EventDescriber(_types);
         if (_doc is not null) Analyse(_doc);
     }
@@ -173,7 +179,7 @@ internal sealed partial class MainForm : Form
             _settings.Save();
             RefreshRecentMenu();
 
-            _types = TypeNameResolver.Load(_settings.RulesIniPaths, doc.SpawnMapIni);
+            _types = TypeNameResolver.ForDocument(doc, _settings.RulesIniPaths);
             _describer = new EventDescriber(_types);
             Analyse(doc);
 
@@ -207,8 +213,11 @@ internal sealed partial class MainForm : Form
     {
         _network = NetworkAnalysis.Build(doc);
         _activity = ActivityAnalysis.Build(doc, _describer);
+        _statistics = StatisticsAnalysis.Build(doc);
 
         PopulateOverview(doc, _network, _activity);
+        PopulateStatistics(doc, _statistics);
+        PopulateSaves(doc);
         PopulateEvents(doc);
         PopulateNetwork(doc, _network);
         PopulateActivity(doc, _activity);
