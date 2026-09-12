@@ -11,7 +11,7 @@ public static class ReplayFormat
     public const uint Version = 1;
     public const uint MinSupportedVersion = 1;
 
-    public const int HeaderSize = 1124;             // sizeof(ReplayHeader)
+    public const int HeaderSize = 1072;             // sizeof(ReplayHeader)
     public const int FrameRecordHeaderSize = 12;
     public const int FrameObjectCensusSize = 8;
     public const int FrameRandomStateSize = 8;
@@ -30,6 +30,12 @@ public static class ReplayFormat
     public const int MaxSelectionTriggersPerFrame = 4096;
     public const int MaxEventsPerFrame = 128 * 128;
     public const uint MaxEmbeddedFileBytes = 32u * 1024u * 1024u;
+
+    // Checkpoint archive bounds: ReplayFormat.h, ReplayRecordedCheckpoint.h and
+    // ReplayCheckpointCodec.h (CheckpointCodec::MaxBytes bounds each inflated payload).
+    public const uint MaxCheckpointArchiveBytes = 32u * 1024u * 1024u;
+    public const uint MaxCheckpointPayloadBytes = 32u * 1024u * 1024u;
+    public const int MaxRecordedCheckpoints = 4;
 
     /// <summary>The spawner sync-flushes the deflate stream this often, bounding crash loss.</summary>
     public const int SyncFlushFrameInterval = 60;
@@ -52,8 +58,8 @@ public static class ReplayFormat
     public const int OffsetRecordedUnixTime = 1044;
     public const int OffsetTotalFrames = 1052;
     public const int OffsetFlags = 1056;
-    public const int OffsetReserved = 1060;
-    public const int ReservedLength = 16;
+    public const int OffsetCheckpointArchiveOffset = 1060;  // uint64
+    public const int OffsetCheckpointArchiveSize = 1068;
 
     /// <summary>
     /// Vanilla Queue_AI_Multiplayer mapping, duplicated in ReplayFormat.h and in the client's

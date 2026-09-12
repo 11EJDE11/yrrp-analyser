@@ -67,13 +67,13 @@ Run("all 512 frame flag combinations preserve block and event alignment", () =>
         Equal(0xCAFEBABEu, doc.Frames[1].GameCrc, "following CRC");
     }
 });
-Run("1124-byte header fields, embedded UTF-8 metadata, and appended header bytes", () =>
+Run("1072-byte header fields, embedded UTF-8 metadata, and appended header bytes", () =>
 {
     foreach (int extra in new[] { 0, 32 })
     {
         var doc = Load(Fixture(Frames(End), extraHeaderBytes: extra));
         var h = doc.Header;
-        Equal(1124u + (uint)extra, h.HeaderSize, "header size");
+        Equal(1072u + (uint)extra, h.HeaderSize, "header size");
         Equal(5u, h.GameMode, "game mode");
         Equal(777, h.UniqueIDCounter, "unique ID");
         Equal(-123456, h.Seed, "seed");
@@ -85,7 +85,7 @@ Run("1124-byte header fields, embedded UTF-8 metadata, and appended header bytes
         Equal(1_800_000_000ul, h.RecordedUnixTime, "timestamp");
         Equal(120u, h.TotalFrames, "total frames");
         Check(h.CleanShutdown, "shutdown flag");
-        for (int i = 0; i < 16; i++) Equal(0xABCDE000u + (uint)i, h.Reserved[i], $"reserved word {i}");
+        Check(!h.HasCheckpointArchive && doc.Checkpoints.Count == 0, "no checkpoint archive");
         Equal("Test \u4e16\u754c", doc.MapName, "INI display map");
         Equal("9.8.7", doc.GamePackageVersion, "INI package version");
         Equal("[Basic]\nName=Fallback map\n", doc.SpawnMapText, "embedded map starts at correct offset");
@@ -141,7 +141,7 @@ Run("invalid header bounds are classified before parsing frames", () =>
 {
     foreach (var (offset, value) in new (int, uint)[]
     {
-        (8, 1123), (8, uint.MaxValue), (16, uint.MaxValue), (24, uint.MaxValue),
+        (8, 1071), (8, uint.MaxValue), (16, uint.MaxValue), (24, uint.MaxValue),
         (24, 250), (28, 250), (1032, 32 * 1024 * 1024 + 1),
         (1036, 32 * 1024 * 1024 + 1), (1040, 7), (1032, 5000),
     })
@@ -249,6 +249,51 @@ Run("exports expose INI metadata, RNG cursors, and selection-trigger IDs", () =>
         Equal(2, json.RootElement.GetProperty("stream").GetProperty("selectionTriggers").GetInt32(), "JSON triggers");
     }
     finally { File.Delete(path); }
+});
+Run("checkpoint archive after the frame stream: index, payload split, CRC, and stream size", () =>
+{
+    Equal(0xCBF43926u, Crc("123456789"u8.ToArray()), "fixture CRC-32 check value");
+    var raw = Frames(w => { Frame(w, 10, 0, 0); Frame(w, 120, 0, 0); End(w); });
+    long plainStream = Load(Fixture(raw)).CompressedStreamBytes;
+
+    var doc = Load(Fixture(raw, archive: Archive((30, Payload(5000, 300), null), (120, Payload(1, 0), null))));
+    Check(doc.SawEndOfStream && !doc.Truncated && doc.Warnings.Count == 0, "archive does not disturb the frame stream");
+    Equal(2, doc.Frames.Count, "frames");
+    Equal(plainStream, doc.CompressedStreamBytes, "stream size stops at the archive");
+    Check(doc.Header.HasCheckpointArchive, "header points at the archive");
+    Equal(2, doc.Checkpoints.Count, "checkpoint count");
+    Equal(30, doc.Checkpoints[0].Frame, "first frame");
+    Equal(120, doc.Checkpoints[1].Frame, "a checkpoint on the last recorded frame is allowed");
+    Equal(8u + 5300u, doc.Checkpoints[0].RawSize, "raw size");
+    Equal(5000L, doc.Checkpoints[0].SaveBytes, "save split");
+    Equal(300L, doc.Checkpoints[0].SidecarBytes, "sidecar split");
+    Check(doc.Checkpoints.All(c => c.Usable), "both usable");
+
+    // A payload fault skips that checkpoint only.
+    doc = Load(Fixture(raw, archive: Archive(
+        (30, Payload(64, 8), 0xDEADBEEF), (60, Payload(0, 8), null),
+        (90, Payload(64, 8, trailing: 1), null), (120, Payload(64, 8), null))));
+    Equal(4, doc.Checkpoints.Count, "entries kept for display");
+    Check(!doc.Checkpoints[0].Usable && doc.Checkpoints[0].Problem!.Contains("CRC"), "CRC mismatch");
+    Check(!doc.Checkpoints[1].Usable, "empty save");
+    Check(!doc.Checkpoints[2].Usable, "bytes after the sidecar");
+    Check(doc.Checkpoints[3].Usable, "later entry still usable");
+    Check(doc.SawEndOfStream && doc.Frames.Count == 2 && doc.Warnings.Count > 0, "faults reported, frames intact");
+
+    // An envelope fault makes playback ignore the whole archive.
+    foreach (var bad in new Func<byte[]>[]
+    {
+        () => Fixture(raw, archive: Archive((60, Payload(8, 8), null), (60, Payload(8, 8), null))),
+        () => Fixture(raw, archive: Archive((121, Payload(8, 8), null))),
+        () => Fixture(raw, archive: Archive(Enumerable.Range(1, 5).Select(i => (i, Payload(8, 8), (uint?)null)).ToArray())),
+        () => { var b = Fixture(raw, archive: Archive((10, Payload(8, 8), null))); Put(b, 1068, BitConverter.ToUInt32(b, 1068) - 1); return b; },
+        () => [.. Fixture(raw, archive: Archive((10, Payload(8, 8), null))), 0],
+    })
+    {
+        doc = Load(bad());
+        Equal(0, doc.Checkpoints.Count, "archive ignored");
+        Check(doc.SawEndOfStream && doc.Frames.Count == 2 && doc.Warnings.Count > 0, "frames intact, archive diagnosed");
+    }
 });
 
 
@@ -435,15 +480,53 @@ static byte[] Chat()
     Encoding.Unicode.GetBytes("hello \u4e16\u754c").CopyTo(b, 73);
     return b;
 }
+static byte[] Payload(int saveBytes, int sidecarBytes, int trailing = 0)
+{
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    w.Write((uint)saveBytes);
+    for (int i = 0; i < saveBytes; i++) w.Write((byte)(i * 7));
+    w.Write((uint)sidecarBytes);
+    for (int i = 0; i < sidecarBytes; i++) w.Write((byte)(i * 13));
+    w.Write(new byte[trailing]);
+    w.Flush();
+    return buffer.ToArray();
+}
+static byte[] Archive(params (int Frame, byte[] Payload, uint? Crc)[] entries)
+{
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    w.Write((uint)entries.Length);
+    foreach (var (frame, payload, crc) in entries)
+    {
+        using var deflated = new MemoryStream();
+        using (var d = new DeflateStream(deflated, CompressionLevel.Optimal, leaveOpen: true)) d.Write(payload);
+        w.Write(frame); w.Write((uint)payload.Length); w.Write(crc ?? Crc(payload));
+        w.Write((uint)deflated.Length); w.Write(deflated.ToArray());
+    }
+    w.Flush();
+    return buffer.ToArray();
+}
+// Bitwise CRC-32, independent of the parser's table-driven one.
+static uint Crc(byte[] data)
+{
+    uint c = 0xFFFFFFFFu;
+    foreach (byte b in data)
+    {
+        c ^= b;
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (uint)-(int)(c & 1));
+    }
+    return ~c;
+}
 static byte[] Fixture(byte[] raw, int extraHeaderBytes = 0, string? ini = null,
-    string? map = null, bool syncFlushOnly = false)
+    string? map = null, bool syncFlushOnly = false, byte[]? archive = null)
 {
     var spawn = Encoding.UTF8.GetBytes(ini ??
         "\uFEFF[Settings]\nUIMapName=Test \u4e16\u754c\nGamePackageVersion=9.8.7\n" +
         "GameClientVersion=obsolete\nName=Tester\nSide=0\nColor=0\nIsSinglePlayer=yes\n" +
         "[Tunnel]\nIp=198.51.100.20\n");
     var spawnmap = Encoding.UTF8.GetBytes(map ?? "[Basic]\nName=Fallback map\n");
-    var h = new byte[1124 + extraHeaderBytes];
+    var h = new byte[1072 + extraHeaderBytes];
     Put(h, 0, 0x50525259); Put(h, 4, 1); Put(h, 8, (uint)h.Length);
     Put(h, 12, 5); Put(h, 16, 777); Put(h, 20, unchecked((uint)-123456));
     Put(h, 24, 7); Put(h, 28, 249);
@@ -451,8 +534,7 @@ static byte[] Fixture(byte[] raw, int extraHeaderBytes = 0, string? ini = null,
     Put(h, 1032, (uint)spawn.Length); Put(h, 1036, (uint)spawnmap.Length); Put(h, 1040, 2);
     BinaryPrimitives.WriteUInt64LittleEndian(h.AsSpan(1044), 1_800_000_000ul);
     Put(h, 1052, 120); Put(h, 1056, 1);
-    for (int i = 0; i < 16; i++) Put(h, 1060 + i * 4, 0xABCDE000u + (uint)i);
-    h.AsSpan(1124).Fill(0xFF);
+    h.AsSpan(1072).Fill(0xFF);
     using var file = new MemoryStream();
     file.Write(h); file.Write(spawn); file.Write(spawnmap);
     using (var deflate = new DeflateStream(file, CompressionLevel.Optimal, leaveOpen: true))
@@ -464,5 +546,12 @@ static byte[] Fixture(byte[] raw, int extraHeaderBytes = 0, string? ini = null,
             return file.ToArray(); // Snapshot before disposal writes the final deflate block.
         }
     }
-    return file.ToArray();
+    if (archive is null) return file.ToArray();
+    // Appended after the finished stream, then stamped into the header, as FinishRecordingCheckpoints does.
+    long archiveOffset = file.Length;
+    file.Write(archive);
+    var bytes = file.ToArray();
+    BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(1060), (ulong)archiveOffset);
+    Put(bytes, 1068, (uint)archive.Length);
+    return bytes;
 }

@@ -19,9 +19,18 @@ public sealed class ReplayHeaderInfo
     public ulong RecordedUnixTime { get; init; }
     public uint TotalFrames { get; init; }
     public uint Flags { get; init; }
-    public uint[] Reserved { get; init; } = [];
+
+    /// <summary>Absolute file offset of the checkpoint archive that follows the frame stream.</summary>
+    public ulong CheckpointArchiveOffset { get; init; }
+    public uint CheckpointArchiveSize { get; init; }
 
     public bool CleanShutdown => (Flags & (uint)ReplayHeaderFlags.CleanShutdown) != 0;
+
+    /// <summary>
+    /// Both archive fields stay zero when the recording captured no saves or never finalized; the
+    /// spawner stamps them only once the whole archive is on disk.
+    /// </summary>
+    public bool HasCheckpointArchive => CheckpointArchiveOffset != 0 || CheckpointArchiveSize != 0;
 
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeSeconds((long)RecordedUnixTime);
 
@@ -36,9 +45,6 @@ public sealed class ReplayHeaderInfo
         5 => "Skirmish",
         _ => $"Unknown ({GameMode})",
     };
-
-    /// <summary>Any reserved word carrying a value this build does not understand, if any.</summary>
-    public bool HasUnknownReservedData => Reserved.Any(w => w != 0);
 }
 
 public readonly record struct Point2D(int X, int Y);

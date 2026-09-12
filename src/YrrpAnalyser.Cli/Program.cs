@@ -72,6 +72,7 @@ static int Report(string[] args)
     Console.WriteLine($"Shutdown        {(doc.Header.CleanShutdown ? "clean" : "NOT CLEAN - recording cut short")}");
     Console.WriteLine($"Stream          {doc.Frames.Count:N0} frame records, {doc.EventCount:N0} events, " +
                       $"{doc.CensusFrameCount:N0} censuses, {doc.CompressionRatio:0.0}x compression");
+    Console.WriteLine($"Checkpoints     {doc.CheckpointSummary}");
     if (!doc.HasEmbeddedMap)
         Console.WriteLine("Map             not embedded - the scenario lives in the game's own mixes");
 

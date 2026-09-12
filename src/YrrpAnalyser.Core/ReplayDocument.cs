@@ -24,8 +24,28 @@ public sealed class ReplayDocument
     /// <summary>All recorded events, back to back, 111 bytes each.</summary>
     public byte[] EventBlob { get; set; } = [];
 
+    /// <summary>The frame stream only - it ends where the checkpoint archive begins, if there is one.</summary>
     public long CompressedStreamBytes { get; init; }
     public long InflatedStreamBytes { get; set; }
+
+    /// <summary>Saves the recording embedded as seek points, in frame order.</summary>
+    public List<RecordedCheckpoint> Checkpoints { get; set; } = [];
+
+    public string CheckpointSummary
+    {
+        get
+        {
+            if (Checkpoints.Count == 0)
+                return Header.HasCheckpointArchive ? "archive present but unreadable - see warnings"
+                     : Header.CleanShutdown ? "none captured"
+                     : "none - the recording did not finalize";
+
+            int unusable = Checkpoints.Count(c => !c.Usable);
+            return $"{Checkpoints.Count} at " + string.Join(", ", Checkpoints.Select(c => TimeLabel(c.Frame))) +
+                   $" ({Checkpoints.Sum(c => (long)c.CompressedSize):N0} bytes)" +
+                   (unusable > 0 ? $", {unusable} unusable" : "");
+        }
+    }
 
     /// <summary>The stream carried its end-of-stream marker, so it is complete on disk.</summary>
     public bool SawEndOfStream { get; set; }

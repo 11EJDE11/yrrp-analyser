@@ -64,6 +64,7 @@ internal sealed partial class MainForm
             ("File", $"{doc.FileSize:N0} bytes"),
             ("Frame stream", $"{doc.CompressedStreamBytes:N0} → {doc.InflatedStreamBytes:N0} bytes " +
                              $"({doc.CompressionRatio:0.0}x)"),
+            ("Checkpoints", doc.CheckpointSummary),
         ]);
 
         yield return SectionHeading("Lobby");

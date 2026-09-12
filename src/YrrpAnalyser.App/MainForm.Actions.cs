@@ -37,6 +37,9 @@ internal sealed partial class MainForm
         sb.AppendLine($"  spawnmap.ini        {doc.Header.SpawnMapSize:N0} bytes");
         sb.AppendLine($"  deflate stream      {doc.CompressedStreamBytes:N0} -> {doc.InflatedStreamBytes:N0} bytes " +
                       $"({doc.CompressionRatio:0.00}x)");
+        sb.AppendLine($"  checkpoint archive  " + (doc.Header.HasCheckpointArchive
+            ? $"{doc.Header.CheckpointArchiveSize:N0} bytes at offset {doc.Header.CheckpointArchiveOffset:N0}"
+            : "none"));
         sb.AppendLine($"  end-of-stream mark  {(doc.SawEndOfStream ? "present" : "MISSING")}");
         sb.AppendLine($"  truncated           {(doc.Truncated ? "yes" : "no")}");
         sb.AppendLine($"  clean shutdown flag {(doc.Header.CleanShutdown ? "set" : "CLEAR")}");
@@ -101,8 +104,20 @@ internal sealed partial class MainForm
         sb.AppendLine($"  RecordedUnixTime    {doc.Header.RecordedUnixTime} " +
                       $"({doc.Header.RecordedAt.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC)");
         sb.AppendLine($"  Flags               0x{doc.Header.Flags:X8}");
-        sb.AppendLine($"  Reserved            {(doc.Header.HasUnknownReservedData ? "carries values this build does not know" : "all zero")}");
+        sb.AppendLine($"  CheckpointArchive   offset {doc.Header.CheckpointArchiveOffset}, size {doc.Header.CheckpointArchiveSize}");
         sb.AppendLine();
+
+        if (doc.Checkpoints.Count > 0)
+        {
+            sb.AppendLine("CHECKPOINTS");
+            sb.AppendLine("  Saves made during the game, embedded so playback can seek to them without");
+            sb.AppendLine("  simulating the frames before. Each is a deflated .SAV plus a simulation sidecar.");
+            sb.AppendLine("     frame      time   compressed         save      sidecar  status");
+            foreach (var c in doc.Checkpoints)
+                sb.AppendLine($"  {c.Frame,8:N0} {doc.TimeLabel(c.Frame),9} {c.CompressedSize,12:N0} " +
+                              $"{c.SaveBytes,12:N0} {c.SidecarBytes,12:N0}  {c.Problem ?? "ok"}");
+            sb.AppendLine();
+        }
 
         sb.AppendLine("EMBEDDED METADATA");
         sb.AppendLine($"  Map name            {doc.MapName}");

@@ -119,7 +119,19 @@ public static class Exporters
                 totalFrames = doc.Header.TotalFrames,
                 cleanShutdown = doc.Header.CleanShutdown,
                 hasEmbeddedMap = doc.HasEmbeddedMap,
+                checkpointArchiveOffset = doc.Header.CheckpointArchiveOffset,
+                checkpointArchiveSize = doc.Header.CheckpointArchiveSize,
             },
+            checkpoints = doc.Checkpoints.Select(c => new
+            {
+                frame = c.Frame,
+                compressedBytes = c.CompressedSize,
+                rawBytes = c.RawSize,
+                saveBytes = c.SaveBytes,
+                sidecarBytes = c.SidecarBytes,
+                usable = c.Usable,
+                problem = c.Problem,
+            }),
             metadata = new
             {
                 map = doc.MapName,

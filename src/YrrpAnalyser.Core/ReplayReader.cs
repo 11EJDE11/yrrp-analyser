@@ -27,6 +27,9 @@ public sealed class ReplayLoadException(ReplayLoadStatus status, string message)
 /// <see cref="DeflateStream"/> reads directly - that is why the spawner writes it without
 /// TDEFL_WRITE_ZLIB_HEADER.
 ///
+/// A recording that embedded saves carries a checkpoint archive after the finished frame stream,
+/// running to EOF; the header's CheckpointArchiveOffset marks where the stream ends.
+///
 /// A recording that died with the game leaves the stream cut short mid-record. That is not an
 /// error: everything up to the last sync flush is good, so the reader keeps what it decoded and
 /// reports the truncation rather than throwing it away.
@@ -92,6 +95,14 @@ public static class ReplayReader
         var spawnMapBytes = new byte[header.SpawnMapSize];
         file.ReadExactly(spawnMapBytes);
 
+        // Bounds are only checked in full by CheckpointArchiveReader; this is just where the frame
+        // stream's byte count stops.
+        long streamEnd = header.HasCheckpointArchive
+                         && header.CheckpointArchiveOffset > (ulong)streamOffset
+                         && header.CheckpointArchiveOffset <= (ulong)file.Length
+            ? (long)header.CheckpointArchiveOffset
+            : file.Length;
+
         var doc = new ReplayDocument
         {
             FilePath = path,
@@ -99,12 +110,16 @@ public static class ReplayReader
             Header = header,
             SpawnIniText = DecodeIni(spawnIniBytes),
             SpawnMapText = DecodeIni(spawnMapBytes),
-            CompressedStreamBytes = file.Length - streamOffset,
+            CompressedStreamBytes = streamEnd - streamOffset,
         };
 
         progress?.Report("Inflating frame stream...");
         file.Position = streamOffset;
         ReadFrameStream(file, doc, progress);
+
+        if (header.HasCheckpointArchive)
+            progress?.Report("Reading checkpoint archive...");
+        doc.Checkpoints = CheckpointArchiveReader.Read(file, header, streamOffset, doc.Warnings);
 
         doc.GameSpeed = GameSpeedTrack.Build(doc.Header, doc.Frames);
         doc.CensusFrameCount = doc.Frames.Count(f => f.Census.HasValue);
@@ -130,11 +145,6 @@ public static class ReplayReader
             randomizer[i] = BinaryPrimitives.ReadUInt32LittleEndian(
                 h.AsSpan(ReplayFormat.OffsetRandomizerTable + i * 4));
 
-        var reserved = new uint[ReplayFormat.ReservedLength];
-        for (int i = 0; i < reserved.Length; i++)
-            reserved[i] = BinaryPrimitives.ReadUInt32LittleEndian(
-                h.AsSpan(ReplayFormat.OffsetReserved + i * 4));
-
         return new ReplayHeaderInfo
         {
             Magic = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetMagic)),
@@ -152,7 +162,8 @@ public static class ReplayReader
             RecordedUnixTime = BinaryPrimitives.ReadUInt64LittleEndian(h.AsSpan(ReplayFormat.OffsetRecordedUnixTime)),
             TotalFrames = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetTotalFrames)),
             Flags = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetFlags)),
-            Reserved = reserved,
+            CheckpointArchiveOffset = BinaryPrimitives.ReadUInt64LittleEndian(h.AsSpan(ReplayFormat.OffsetCheckpointArchiveOffset)),
+            CheckpointArchiveSize = BinaryPrimitives.ReadUInt32LittleEndian(h.AsSpan(ReplayFormat.OffsetCheckpointArchiveSize)),
         };
     }
 
