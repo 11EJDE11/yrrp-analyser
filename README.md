@@ -38,7 +38,10 @@ Production events carry a position in the game's type array rather than a name, 
 
 Per-player connection response, requested latency level, MaxAhead, mean process time and
 FRAMEINFO spacing share one game-time axis. Drag any chart to pan and the rest follow,
-Ctrl+scroll to zoom, double-click to reset. Large FRAMEINFO gaps are marked in red.
+Ctrl+scroll to zoom, double-click the plot to reset. Click a legend name to hide or show
+that series in its chart, Shift+click to isolate it, and **Show all** to restore every series.
+Legends wrap to keep every player accessible. Line charts use unfilled strokes; power
+usage uses a dashed stroke in the same player colour. Large FRAMEINFO gaps are marked in red.
 
 Process time is already milliseconds per frame, averaged over normally 128 frames. It measures
 main-loop work including input, rendering and logic, ending before the network queue and pacing
@@ -105,3 +108,12 @@ dotnet run --project tests/YrrpAnalyser.CompatibilityTests
 
 Fixtures use explicit wire offsets and block flags independently of `ReplayFormat.cs`, including
 combined blocks, appended header bytes, empty/campaign recordings, and truncated or invalid records.
+
+Run the Windows chart and list-view regression checks with:
+
+```
+dotnet run --project tests/YrrpAnalyser.AppTests
+```
+
+These exercise legend visibility and wrapping, zoomed line rendering, drag capture, and
+column sizing against both headers and cells, including empty and virtual lists.

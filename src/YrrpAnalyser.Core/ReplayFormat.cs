@@ -38,13 +38,14 @@ public static class ReplayFormat
     public const int MaxRecordedCheckpoints = 4;
 
     // Statistics: the per-frame HouseStats block and the statistics section after the frame stream.
-    public const int HouseStatsSampleSize = 112;           // sizeof(HouseStatsSample)
+    public const int HouseStatsSampleSize = 84;            // sizeof(HouseStatsSample)
     public const int MaxHouseStatsPerFrame = 32;
     public const int HouseStatsIntervalFrames = 60;
     public const uint MaxStatisticsSectionBytes = 8u * 1024u * 1024u;
-    public const int StatisticsHouseRecordSize = 310;      // sizeof(StatisticsHouseRecord)
+    public const int StatisticsHouseRecordSize = 282;      // sizeof(StatisticsHouseRecord)
     public const int StatisticsGameRecordSize = 20;        // sizeof(StatisticsGameRecord)
-    public const int IncomeSourceCount = 7;
+    public const int MoneyInRecordSize = 12;               // sizeof(MoneyInRecord)
+    public const int MaxMoneyInPerFrame = 1024;
 
     /// <summary>A four-character chunk tag as MakeChunkTag packs it: first character in the low byte.</summary>
     public static uint ChunkTag(string tag) =>
@@ -54,6 +55,7 @@ public static class ReplayFormat
     public static readonly uint ChunkHouses = ChunkTag("HOUS");
     public static readonly uint ChunkStatsPacket = ChunkTag("STAT");
     public static readonly uint ChunkGame = ChunkTag("GAME");
+    public static readonly uint ChunkModules = ChunkTag("MODS");
 
     /// <summary>The spawner sync-flushes the deflate stream this often, bounding crash loss.</summary>
     public const int SyncFlushFrameInterval = 60;
@@ -131,8 +133,11 @@ public enum FrameRecordFlags : uint
     /// <summary>A positive int32 count followed by that many 84-byte HouseStatsSample records.</summary>
     HouseStats = 1u << 9,
 
+    /// <summary>A positive int32 count followed by that many 12-byte MoneyInRecord payments.</summary>
+    MoneyIn = 1u << 10,
+
     Known = TacticalPos | Selection | SideChannel | GameCrc | Extensions
-            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers | HouseStats,
+            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers | HouseStats | MoneyIn,
 }
 
 public enum SideChannelEventType : byte

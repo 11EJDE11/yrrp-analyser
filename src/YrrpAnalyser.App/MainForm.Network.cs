@@ -123,7 +123,7 @@ internal sealed partial class MainForm
     /// <summary>Nothing about the wheel or the drag is discoverable, so it is written down.</summary>
     internal static Label ChartHint() => new()
     {
-        Text = "Drag a chart to pan, Ctrl+scroll to zoom, double-click to reset. They share one time axis, so moving any of them moves them all.",
+        Text = "Click a legend name to toggle it; Shift+click to isolate it; Show all to restore.\nDrag the plot to pan, Ctrl+scroll to zoom, double-click the plot to reset. Charts share one time axis, and hovering one shows the same moment on all of them.",
         ForeColor = Theme.Muted,
         AutoSize = true,
         Margin = new Padding(0, 0, 0, 8),

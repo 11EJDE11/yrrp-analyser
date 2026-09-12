@@ -26,7 +26,7 @@ internal sealed partial class MainForm
         ItemHeight = 22,
     };
 
-    private readonly ListView _eventList = new()
+    private readonly HeaderAwareListView _eventList = new()
     {
         Dock = DockStyle.Fill,
         View = View.Details,
@@ -106,6 +106,15 @@ internal sealed partial class MainForm
         BackColor = Theme.Background,
     };
 
+    // A chart pinned above the scrolling Statistics page, so it stays in view while the rest scrolls past.
+    private readonly Panel _statisticsPinned = new()
+    {
+        Dock = DockStyle.Top,
+        Visible = false,
+        BackColor = Theme.Background,
+        Padding = new Padding(16, 8, 16 + SystemInformation.VerticalScrollBarWidth, 8),
+    };
+
     private readonly TextBox _spawnIniBox = MakeCodeBox();
     private readonly TextBox _spawnMapBox = MakeCodeBox();
     private readonly TextBox _diagnosticsBox = MakeCodeBox();
@@ -128,7 +137,7 @@ internal sealed partial class MainForm
         }
 
         _tabs.TabPages.Add(NewPage("Overview", Scrollable(_overviewFlow)));
-        _tabs.TabPages.Add(NewPage("Statistics", Scrollable(_statisticsFlow)));
+        _tabs.TabPages.Add(NewPage("Statistics", BuildStatisticsPage()));
         _tabs.TabPages.Add(NewPage("Events", BuildEventsTab()));
         _tabs.TabPages.Add(NewPage("Network", Scrollable(_networkFlow)));
         _tabs.TabPages.Add(NewPage("Activity", Scrollable(_activityFlow)));
@@ -140,6 +149,22 @@ internal sealed partial class MainForm
             "The map the game actually loaded, embedded whole. This is the file the client has to " +
             "write back out before a replay will play.")));
         _tabs.TabPages.Add(NewPage("Diagnostics", BuildDiagnosticsTab()));
+    }
+
+    private Control BuildStatisticsPage()
+    {
+        var root = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background };
+        // Fill first, then Top: the control added last docks first, so the pinned strip takes the top
+        // and the scrolling page the rest.
+        root.Controls.Add(Scrollable(_statisticsFlow));
+        root.Controls.Add(_statisticsPinned);
+        _statisticsPinned.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Theme.Border);
+            int y = _statisticsPinned.Height - 1;
+            e.Graphics.DrawLine(pen, 0, y, _statisticsPinned.Width, y);
+        };
+        return root;
     }
 
     private static TabPage NewPage(string title, Control content) =>

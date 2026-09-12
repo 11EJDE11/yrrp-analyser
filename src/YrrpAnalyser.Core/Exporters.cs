@@ -104,8 +104,7 @@ public static class Exporters
         using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
         writer.WriteLine("Frame,Time,HouseIndex,Player,Credits,StoredOreValue,CreditsSpent,HarvestedCredits," +
                          "PowerOutput,PowerDrain,Units,Infantry,Aircraft,Buildings,ArmyValue,BuildingValue," +
-                         "UnitsKilled,BuildingsKilled,UnitsLost,BuildingsLost,UnitsBuilt,BuildingsBuilt,Score," +
-                         "IncomeHarvested,IncomeBuildings,IncomeSold,IncomeRefunded,IncomeCrates,IncomeStolen,IncomeOther,Flags");
+                         "UnitsKilled,BuildingsKilled,UnitsLost,BuildingsLost,UnitsBuilt,BuildingsBuilt,Score,Flags");
 
         foreach (var f in doc.Frames)
         {
@@ -121,9 +120,36 @@ public static class Exporters
                     s.PowerOutput, s.PowerDrain, s.Units, s.Infantry, s.Aircraft, s.Buildings,
                     s.ArmyValue, s.BuildingValue, s.UnitsKilled, s.BuildingsKilled, s.UnitsLost, s.BuildingsLost,
                     s.UnitsBuilt, s.BuildingsBuilt, s.Score,
-                    s.IncomeHarvested, s.IncomeBuildings, s.IncomeSold, s.IncomeRefunded, s.IncomeCrates,
-                    s.IncomeStolen, s.IncomeOther,
                     Csv(s.Flags.ToString())));
+            }
+        }
+    }
+
+    /// <summary>Every recorded payment with its resolved caller and what the income table makes of it.</summary>
+    public static void WriteMoneyInCsv(string path, ReplayDocument doc, IncomeClassifier? classifier = null)
+    {
+        classifier ??= IncomeClassifier.Default;
+        var modules = (IReadOnlyList<ModuleInfo>?)doc.Statistics?.Modules ?? [];
+
+        using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
+        writer.WriteLine("Frame,Time,HouseIndex,Player,Caller,Module,Offset,Source,Description,Amount");
+        foreach (var f in doc.Frames)
+        {
+            if (f.MoneyIn is null) continue;
+            foreach (var m in f.MoneyIn)
+            {
+                var (source, caller, rule) = classifier.Classify(m.Caller, modules);
+                writer.WriteLine(string.Join(',',
+                    f.FrameNumber,
+                    Csv(doc.TimeLabel(f.FrameNumber)),
+                    m.House,
+                    Csv(StatisticsAnalysis.HouseName(doc, m.House)),
+                    $"0x{m.Caller:X8}",
+                    Csv(caller.Module),
+                    $"0x{caller.Offset:X}",
+                    source,
+                    Csv(rule?.Description ?? ""),
+                    m.Amount));
             }
         }
     }
@@ -158,6 +184,9 @@ public static class Exporters
                 houseIndex = t.HouseIndex,
                 name = t.Name,
                 totalIncome = t.TotalIncome,
+                netSpent = t.NetSpent,
+                directIncome = Math.Round(t.DirectIncome),
+                incomeBySource = t.IncomeBySource.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
                 peakIncomePerMinute = Math.Round(t.PeakIncomeRate),
                 peakArmyValue = t.PeakArmyValue,
                 peakArmySize = t.PeakArmySize,
@@ -181,10 +210,24 @@ public static class Exporters
                 score = h.Score,
                 unitsKilledOfHouse = h.UnitsKilledOfHouse,
                 buildingsKilledOfHouse = h.BuildingsKilledOfHouse,
-                income = Enum.GetValues<IncomeSource>().ToDictionary(s => s.ToString(), h.IncomeFrom),
                 counts = Enum.GetValues<StatisticsArray>().ToDictionary(a => a.ToString(), a => NamedCounts(stats, h, a)),
             }),
             game = stats?.Game,
+            modules = stats?.Modules.Select(m => new
+            {
+                name = m.Name,
+                baseAddress = $"0x{m.Base:X8}",
+                size = m.Size,
+                timestamp = $"0x{m.TimeDateStamp:X8}",
+            }),
+            unclassifiedCallers = analysis.Unclassified.Select(u => new
+            {
+                caller = u.Caller.ToString(),
+                timestamp = $"0x{u.Caller.TimeDateStamp:X8}",
+                amount = u.Amount,
+                payments = u.Payments,
+                houses = u.Houses,
+            }),
             statsPacket = stats?.StatsPacket?.Fields.Select(f => new
             {
                 tag = f.Tag,

@@ -9,6 +9,9 @@
     <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="YrrpAnalyser.AppTests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\YrrpAnalyser.Core\YrrpAnalyser.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

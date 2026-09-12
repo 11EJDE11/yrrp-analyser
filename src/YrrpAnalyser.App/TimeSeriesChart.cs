@@ -11,8 +11,15 @@ internal sealed class ChartSeries
     public string Name { get; init; } = "";
     public Color Color { get; init; } = Theme.Accent;
     public SeriesStyle Style { get; init; } = SeriesStyle.Line;
+    public DashStyle DashStyle { get; init; } = DashStyle.Solid;
     public IReadOnlyList<Sample> Points { get; init; } = [];
     public bool Visible { get; set; } = true;
+
+    /// <summary>
+    /// What the series is about - a player - the same on every chart, so a <see cref="ChartGroup"/> can
+    /// show and hide it everywhere at once. Null leaves the series to its own chart's legend.
+    /// </summary>
+    public string? Key { get; init; }
 }
 
 /// <summary>
@@ -20,6 +27,9 @@ internal sealed class ChartSeries
 /// started on.
 /// </summary>
 internal sealed record ChartMarker(int Frame, Color Color, string Label);
+
+/// <summary>A button in a chart's title bar.</summary>
+internal sealed record ChartButton(string Caption, Action Click);
 
 /// <summary>
 /// A small frame-versus-value chart. X is always the frame number, labelled as elapsed game time,
@@ -31,7 +41,9 @@ internal sealed class TimeSeriesChart : Control
     private const int RightMargin = 12;
     private const int TopMargin = 26;
     private const int BottomMargin = 30;
-    private const int LegendHeight = 18;
+    private int _legendHeight = 22;
+    private readonly List<(ChartSeries? Series, Rectangle Bounds)> _legend = [];
+    private bool _layingOutLegend;
 
     private readonly List<ChartSeries> _series = [];
     private readonly List<ChartMarker> _markers = [];
@@ -44,6 +56,8 @@ internal sealed class TimeSeriesChart : Control
     private bool _panning;
     private int _panAnchorFrame;
     private int _panAnchorX;
+    // The frame another chart in the group is hovered at, shown here as well.
+    private int? _linkedHoverFrame;
 
     public string Title { get; set; } = "";
     public string ValueSuffix { get; set; } = "";
@@ -63,6 +77,13 @@ internal sealed class TimeSeriesChart : Control
     /// <summary>Charts sharing a group scroll and zoom together.</summary>
     public ChartGroup? Group { get; set; }
 
+    /// <summary>Buttons at the right of the title bar, left to right.</summary>
+    public IReadOnlyList<ChartButton> Buttons { get; set; } = [];
+
+    public IReadOnlyList<ChartMarker> Markers => _markers;
+    public int ViewMinFrame => _viewMinFrame;
+    public int ViewMaxFrame => _viewMaxFrame;
+
     public TimeSeriesChart()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
@@ -80,6 +101,7 @@ internal sealed class TimeSeriesChart : Control
         _series.AddRange(series);
         _markers.Clear();
         if (markers is not null) _markers.AddRange(markers);
+        LayoutLegend();
         Rescale();
         Invalidate();
     }
@@ -114,6 +136,13 @@ internal sealed class TimeSeriesChart : Control
         foreach (var s in _series)
         {
             if (!s.Visible) continue;
+            // A zoom can sit entirely between samples. Include the values of the segments
+            // crossing its edges, without scaling to peaks outside the visible range.
+            if (s.Style is SeriesStyle.Line or SeriesStyle.Step)
+            {
+                max = Math.Max(max, ValueAtFrame(s, _viewMinFrame) ?? 0);
+                max = Math.Max(max, ValueAtFrame(s, _viewMaxFrame) ?? 0);
+            }
             foreach (var p in s.Points)
             {
                 if (p.Frame < _viewMinFrame || p.Frame > _viewMaxFrame) continue;
@@ -143,7 +172,51 @@ internal sealed class TimeSeriesChart : Control
     private Rectangle PlotArea => new(
         LeftMargin, TopMargin,
         Math.Max(1, Width - LeftMargin - RightMargin),
-        Math.Max(1, Height - TopMargin - BottomMargin - LegendHeight));
+        Math.Max(1, Height - TopMargin - BottomMargin - _legendHeight));
+
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        LayoutLegend();
+    }
+
+    private void LayoutLegend()
+    {
+        if (_layingOutLegend) return;
+        _layingOutLegend = true;
+        try
+        {
+            _legend.Clear();
+            int rowHeight = Math.Max(22, TextRenderer.MeasureText("Ag", Theme.MonoSmall).Height + 6);
+            int available = Math.Max(1, Width - LeftMargin - RightMargin);
+            int x = LeftMargin, y = 0;
+            var entries = _series.Where(s => s.Points.Count > 0).Cast<ChartSeries?>().ToList();
+            if (entries.Count > 0) entries.Add(null); // Show all remains available after hiding every series.
+            foreach (var s in entries)
+            {
+                int width = Math.Min(available, TextRenderer.MeasureText(s?.Name ?? "Show all", Theme.MonoSmall).Width + 32);
+                if (x > LeftMargin && x + width > Width - RightMargin)
+                {
+                    x = LeftMargin;
+                    y += rowHeight;
+                }
+                _legend.Add((s, new Rectangle(x, y, width, rowHeight)));
+                x += width;
+            }
+            int height = y + rowHeight;
+            int change = height - _legendHeight;
+            _legendHeight = height;
+            // Preserve plot height when a narrow window needs more legend rows.
+            Height += change;
+            Invalidate();
+        }
+        finally { _layingOutLegend = false; }
+    }
+
+    private Rectangle LegendBounds(Rectangle bounds) =>
+        new(bounds.X, Height - _legendHeight - 4 + bounds.Y, bounds.Width, bounds.Height);
+
+    private int LegendAt(Point point) => _legend.FindIndex(entry => LegendBounds(entry.Bounds).Contains(point));
 
     private float FrameToX(double frame)
     {
@@ -176,11 +249,16 @@ internal sealed class TimeSeriesChart : Control
         using var borderPen = new Pen(Theme.Border);
         g.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
 
+        var buttons = ButtonBounds();
         if (Title.Length > 0)
         {
             using var titleBrush = new SolidBrush(Theme.Text);
-            g.DrawString(Title, Theme.UiBold, titleBrush, 8, 5);
+            using var titleFormat = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+            float right = buttons.Count == 0 ? Width - RightMargin : buttons[0].Left - 8;
+            g.DrawString(Title, Theme.UiBold, titleBrush, new RectangleF(8, 5, Math.Max(1, right - 8), TopMargin), titleFormat);
         }
+        for (int i = 0; i < buttons.Count; i++)
+            DrawTitleButton(g, Buttons[i].Caption, buttons[i]);
 
         if (_series.Count == 0 || _series.All(s => s.Points.Count == 0))
         {
@@ -194,7 +272,7 @@ internal sealed class TimeSeriesChart : Control
 
         // Series are clipped to the plot: a bar at frame zero is half a bar wide to the left of
         // the axis, and would otherwise paint over the value labels.
-        var previousClip = g.Clip;
+        using var previousClip = g.Clip;
         g.SetClip(plot);
         DrawMarkers(g, plot);
         foreach (var s in _series)
@@ -205,6 +283,11 @@ internal sealed class TimeSeriesChart : Control
         g.Clip = previousClip;
 
         DrawLegend(g);
+        if (!_series.Any(s => s.Visible && s.Points.Count > 0))
+        {
+            using var muted = new SolidBrush(Theme.Muted);
+            g.DrawString("All series hidden. Click a legend name or Show all.", Font, muted, plot.Left + 4, plot.Top + 8);
+        }
         DrawHover(g, plot);
     }
 
@@ -257,16 +340,22 @@ internal sealed class TimeSeriesChart : Control
 
     private void DrawSeries(Graphics g, Rectangle plot, ChartSeries s)
     {
-        using var pen = new Pen(s.Color, 1.6f) { LineJoin = LineJoin.Round };
-        using var fill = new SolidBrush(Color.FromArgb(38, s.Color));
+        using var pen = new Pen(s.Color, 2f) { LineJoin = LineJoin.Round, DashStyle = s.DashStyle };
         using var dot = new SolidBrush(s.Color);
 
         var points = new List<PointF>(Math.Min(s.Points.Count, plot.Width * 2));
         int previousX = int.MinValue;
 
-        foreach (var p in s.Points)
+        for (int i = 0; i < s.Points.Count; i++)
         {
-            if (p.Frame < _viewMinFrame || p.Frame > _viewMaxFrame) continue;
+            var p = s.Points[i];
+            // Keep neighbouring samples so lines cross the visible zoom boundaries.
+            if (s.Style is SeriesStyle.Line or SeriesStyle.Step)
+            {
+                if (p.Frame < _viewMinFrame && (i + 1 == s.Points.Count || s.Points[i + 1].Frame < _viewMinFrame)) continue;
+                if (p.Frame > _viewMaxFrame && (i == 0 || s.Points[i - 1].Frame > _viewMaxFrame)) break;
+            }
+            else if (p.Frame < _viewMinFrame || p.Frame > _viewMaxFrame) continue;
             float x = FrameToX(p.Frame);
             float y = ValueToY(p.Value);
 
@@ -301,42 +390,53 @@ internal sealed class TimeSeriesChart : Control
             return;
         }
 
-        // A step series usually sits high in its own range, so filling under it turns the whole
-        // plot into one block and hides the second player's line behind it.
-        if (s.Style != SeriesStyle.Step)
-        {
-            var area = new List<PointF>(points.Count + 2) { new(points[0].X, plot.Bottom) };
-            area.AddRange(points);
-            area.Add(new PointF(points[^1].X, plot.Bottom));
-            g.FillPolygon(fill, [.. area]);
-        }
-
         g.DrawLines(pen, [.. points]);
     }
 
     private void DrawLegend(Graphics g)
     {
-        float x = LeftMargin;
-        float y = Height - LegendHeight - 4;
-        using var brush = new SolidBrush(Theme.Muted);
-
-        foreach (var s in _series)
+        foreach (var (s, bounds) in _legend)
         {
-            if (s.Points.Count == 0) continue;
-            using var swatch = new SolidBrush(s.Visible ? s.Color : Theme.Border);
-            g.FillRectangle(swatch, x, y + 4, 9, 9);
-            var size = g.MeasureString(s.Name, Theme.MonoSmall);
-            g.DrawString(s.Name, Theme.MonoSmall, brush, x + 12, y + 1);
-            x += 12 + size.Width + 12;
-            if (x > Width - 40) break;
+            var rect = LegendBounds(bounds);
+            if (_hover is { } h && rect.Contains(h))
+            {
+                using var highlight = new SolidBrush(Theme.Grid);
+                g.FillRectangle(highlight, rect);
+            }
+            if (s is not null)
+            {
+                using var swatch = new Pen(s.Visible ? s.Color : Theme.Border, 2f) { DashStyle = s.DashStyle };
+                g.DrawLine(swatch, rect.X + 4, rect.Y + rect.Height / 2, rect.X + 19, rect.Y + rect.Height / 2);
+            }
+            var label = new Rectangle(rect.X + 24, rect.Y, Math.Max(1, rect.Width - 28), rect.Height);
+            TextRenderer.DrawText(g, s?.Name ?? "Show all", Theme.MonoSmall, label,
+                s is null ? Theme.Accent : s.Visible ? Theme.Text : Theme.Muted,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            if (s is { Visible: false })
+            {
+                using var strike = new Pen(Theme.Muted);
+                g.DrawLine(strike, label.Left, label.Top + label.Height / 2, label.Right, label.Top + label.Height / 2);
+            }
         }
     }
 
     private void DrawHover(Graphics g, Rectangle plot)
     {
-        if (_hover is not { } h || !plot.Contains(h)) return;
+        int frame;
+        float anchorY;
+        if (_hover is { } h && plot.Contains(h))
+        {
+            frame = XToFrame(h.X);
+            anchorY = h.Y;
+        }
+        else if (_linkedHoverFrame is { } linked && linked >= _viewMinFrame && linked <= _viewMaxFrame)
+        {
+            // Another chart in the group is hovered: show the same moment here.
+            frame = linked;
+            anchorY = plot.Top + 4;
+        }
+        else return;
 
-        int frame = XToFrame(h.X);
         using var crosshair = new Pen(Theme.Muted) { DashStyle = DashStyle.Dot };
         float x = FrameToX(frame);
         g.DrawLine(crosshair, x, plot.Top, x, plot.Bottom);
@@ -349,9 +449,10 @@ internal sealed class TimeSeriesChart : Control
         foreach (var s in _series)
         {
             if (!s.Visible || s.Points.Count == 0) continue;
-            var nearest = NearestSample(s, frame);
-            if (nearest is null) continue;
-            lines.Add(($"{s.Name}: {FormatValue(nearest.Value.Value)}{ValueSuffix}", s.Color));
+            double? value = s.Style is SeriesStyle.Line or SeriesStyle.Step
+                ? ValueAtFrame(s, frame) : NearestSample(s, frame)?.Value;
+            if (value is null) continue;
+            lines.Add(($"{s.Name}: {FormatValue(value.Value)}{ValueSuffix}", s.Color));
         }
 
         float width = 0, height = 4;
@@ -365,7 +466,8 @@ internal sealed class TimeSeriesChart : Control
 
         float boxX = x + 10;
         if (boxX + width > plot.Right) boxX = x - width - 10;
-        float boxY = Math.Min(h.Y, plot.Bottom - height - 4);
+        boxX = Math.Max(4, Math.Min(boxX, Width - width - 4));
+        float boxY = Math.Max(TopMargin, Math.Min(anchorY, Height - _legendHeight - height - 4));
 
         using var back = new SolidBrush(Color.FromArgb(244, 255, 255, 255));
         using var border = new Pen(Theme.Border);
@@ -381,9 +483,78 @@ internal sealed class TimeSeriesChart : Control
         }
     }
 
+    /// <summary>Where each title-bar button sits, in the order of <see cref="Buttons"/>, packed to the right.</summary>
+    private List<Rectangle> ButtonBounds()
+    {
+        var bounds = new List<Rectangle>(Buttons.Count);
+        int right = Width - RightMargin;
+        for (int i = Buttons.Count - 1; i >= 0; i--)
+        {
+            var size = TextRenderer.MeasureText(Buttons[i].Caption, Theme.MonoSmall);
+            int width = size.Width + 14, height = Math.Min(TopMargin - 6, size.Height + 4);
+            bounds.Insert(0, new Rectangle(right - width, 3, width, height));
+            right -= width + 4;
+        }
+        return bounds;
+    }
+
+    private int ButtonAt(Point point) => ButtonBounds().FindIndex(b => b.Contains(point));
+
+    private void DrawTitleButton(Graphics g, string caption, Rectangle bounds)
+    {
+        bool hot = _hover is { } h && bounds.Contains(h);
+        using (var fill = new SolidBrush(hot ? Theme.Grid : Theme.Panel)) g.FillRectangle(fill, bounds);
+        using (var border = new Pen(Theme.Border)) g.DrawRectangle(border, bounds);
+        TextRenderer.DrawText(g, caption, Theme.MonoSmall, bounds, Theme.Accent,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+    }
+
+    private bool IsClickable(Point point) => LegendAt(point) >= 0 || ButtonAt(point) >= 0;
+
+    internal void ShowLinkedHover(int? frame)
+    {
+        if (_linkedHoverFrame == frame) return;
+        _linkedHoverFrame = frame;
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides every keyed series the map names; see <see cref="ChartGroup.BroadcastVisibility"/>.</summary>
+    internal void ApplyVisibility(IReadOnlyDictionary<string, bool> shownByKey)
+    {
+        bool changed = false;
+        foreach (var s in _series)
+        {
+            if (s.Key is { } key && shownByKey.TryGetValue(key, out bool shown) && s.Visible != shown)
+            {
+                s.Visible = shown;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        RecomputeValueRange();
+        Invalidate();
+    }
+
     private string LabelForFrame(int frame) => TimeLabeller is { } label
         ? label(frame)
         : ReplayDocument.FormatTime(TimeSpan.FromSeconds(frame / (double)Math.Max(1, SimulationFps)));
+
+    private static double? ValueAtFrame(ChartSeries s, int frame)
+    {
+        if (s.Points.Count == 0 || frame < s.Points[0].Frame || frame > s.Points[^1].Frame) return null;
+        int low = 0, high = s.Points.Count - 1;
+        while (low < high)
+        {
+            int mid = low + (high - low + 1) / 2;
+            if (s.Points[mid].Frame <= frame) low = mid;
+            else high = mid - 1;
+        }
+        var before = s.Points[low];
+        if (s.Style == SeriesStyle.Step || before.Frame == frame || low == s.Points.Count - 1)
+            return before.Value;
+        var after = s.Points[low + 1];
+        return before.Value + (after.Value - before.Value) * (frame - before.Frame) / (after.Frame - before.Frame);
+    }
 
     private static Sample? NearestSample(ChartSeries s, int frame)
     {
@@ -413,21 +584,48 @@ internal sealed class TimeSeriesChart : Control
         }
 
         _hover = e.Location;
+        Cursor = IsClickable(e.Location) ? Cursors.Hand : Cursors.Default;
         Invalidate();
+        Group?.BroadcastHover(this, PlotArea.Contains(e.Location) ? XToFrame(e.X) : null);
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
         _hover = null;
+        if (!_panning) Cursor = Cursors.Default;
         Invalidate();
+        Group?.BroadcastHover(this, null);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left) return;
+        int button = ButtonAt(e.Location);
+        if (button >= 0)
+        {
+            Buttons[button].Click();
+            return;
+        }
+        int legendIndex = LegendAt(e.Location);
+        if (legendIndex >= 0)
+        {
+            var selected = _legend[legendIndex].Series;
+            if (selected is null)
+                foreach (var s in _series) s.Visible = true;
+            else if ((ModifierKeys & Keys.Shift) != 0)
+                foreach (var s in _series) s.Visible = ReferenceEquals(s, selected);
+            else
+                selected.Visible = !selected.Visible;
+            RecomputeValueRange();
+            Invalidate();
+            Group?.BroadcastVisibility(this);
+            return;
+        }
+        if (!PlotArea.Contains(e.Location)) return;
         _panning = true;
+        Capture = true;
         _panAnchorX = e.X;
         _panAnchorFrame = _viewMinFrame;
         Cursor = Cursors.SizeWE;
@@ -437,14 +635,21 @@ internal sealed class TimeSeriesChart : Control
     {
         base.OnMouseUp(e);
         _panning = false;
-        Cursor = Cursors.Default;
+        Capture = false;
+        Cursor = IsClickable(e.Location) ? Cursors.Hand : Cursors.Default;
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (!Capture) { _panning = false; Cursor = Cursors.Default; }
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
+        if (e.Button != MouseButtons.Left || !PlotArea.Contains(e.Location)) return;
         ResetView();
-        Group?.Broadcast(this, _dataMinFrame, _dataMaxFrame);
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)
@@ -516,6 +721,37 @@ internal sealed class ChartGroup
     }
 
     public void Clear() => _members.Clear();
+
+    public void Remove(TimeSeriesChart chart)
+    {
+        _members.Remove(chart);
+        if (ReferenceEquals(chart.Group, this)) chart.Group = null;
+    }
+
+    /// <summary>Shows the frame one chart is hovered at on every other chart, or clears it with null.</summary>
+    public void BroadcastHover(TimeSeriesChart origin, int? frame)
+    {
+        foreach (var member in _members)
+            if (!ReferenceEquals(member, origin))
+                member.ShowLinkedHover(frame);
+    }
+
+    /// <summary>
+    /// Matches every other chart's keyed series to one chart's legend, so hiding or isolating a player
+    /// on one chart does it on all of them. A key counts as shown when any of its series is.
+    /// </summary>
+    public void BroadcastVisibility(TimeSeriesChart origin)
+    {
+        var shown = new Dictionary<string, bool>();
+        foreach (var s in origin.Series)
+            if (s.Key is { } key)
+                shown[key] = shown.GetValueOrDefault(key) || s.Visible;
+        if (shown.Count == 0) return;
+
+        foreach (var member in _members)
+            if (!ReferenceEquals(member, origin))
+                member.ApplyVisibility(shown);
+    }
 
     public void Broadcast(TimeSeriesChart origin, int minFrame, int maxFrame)
     {

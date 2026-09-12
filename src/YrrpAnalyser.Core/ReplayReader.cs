@@ -291,7 +291,7 @@ public static class ReplayReader
                 }
 
                 // ReplayFrameCodec.cpp reads census, RNG, speed, selection triggers, house stats,
-                // then extensions before gameplay events. This is not numeric flag-bit order.
+                // money in, then extensions before gameplay events. This is not numeric flag-bit order.
                 // Census and RNG blocks are still readable but no longer written.
                 if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0)
                 {
@@ -357,6 +357,28 @@ public static class ReplayReader
                             ReplayFormat.HouseStatsSampleSize));
                 }
 
+                if ((flags & (uint)FrameRecordFlags.MoneyIn) != 0)
+                {
+                    if (!reader.TryRead(4, out var mc)) { doc.Truncated = true; break; }
+                    int count = BinaryPrimitives.ReadInt32LittleEndian(mc);
+                    if (count <= 0 || count > ReplayFormat.MaxMoneyInPerFrame)
+                    {
+                        doc.Warnings.Add($"Frame {frameNumber} claims {count} payments, " +
+                                         $"outside 1..{ReplayFormat.MaxMoneyInPerFrame}; stopped reading here.");
+                        break;
+                    }
+                    if (!reader.TryRead(count * ReplayFormat.MoneyInRecordSize, out var mb))
+                    { doc.Truncated = true; break; }
+                    record.MoneyIn = new MoneyIn[count];
+                    for (int i = 0; i < count; i++)
+                    {
+                        var m = mb.Slice(i * ReplayFormat.MoneyInRecordSize, ReplayFormat.MoneyInRecordSize);
+                        record.MoneyIn[i] = new MoneyIn(m[0],
+                            BinaryPrimitives.ReadUInt32LittleEndian(m[4..]),
+                            BinaryPrimitives.ReadInt32LittleEndian(m[8..]));
+                    }
+                }
+
                 if ((flags & (uint)FrameRecordFlags.Extensions) != 0)
                 {
                     if (!reader.TryRead(4, out var eb)) { doc.Truncated = true; break; }
@@ -411,14 +433,13 @@ public static class ReplayReader
 
     private static HouseStatsSample ParseHouseStats(ReadOnlySpan<byte> r)
     {
-        var f = new int[28];
+        var f = new int[21];
         for (int i = 0; i < f.Length; i++)
             f[i] = BinaryPrimitives.ReadInt32LittleEndian(r[(i * 4)..]);
         return new HouseStatsSample(
             f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10],
             f[11], f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19],
-            f[20], f[21], f[22], f[23], f[24], f[25], f[26],
-            (HouseStatsFlags)(uint)f[27]);
+            (HouseStatsFlags)(uint)f[20]);
     }
 
     private static SideChannelEvent ParseSideChannel(ReadOnlySpan<byte> r)

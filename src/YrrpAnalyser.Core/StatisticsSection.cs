@@ -111,12 +111,7 @@ public sealed class HouseSummary
     /// <summary>Indexed by the victim's house: how many of that house's units this house destroyed.</summary>
     public int[] UnitsKilledOfHouse { get; init; } = [];
     public int[] BuildingsKilledOfHouse { get; init; } = [];
-    /// <summary>Cumulative income by <see cref="IncomeSource"/>, counted by the recorder.</summary>
-    public int[] Income { get; init; } = new int[ReplayFormat.IncomeSourceCount];
     public int[][] Arrays { get; init; } = [];
-
-    public int IncomeFrom(IncomeSource source) => (int)source < Income.Length ? Income[(int)source] : 0;
-    public int IncomeTotal => Income.Sum();
 
     public int[] Array(StatisticsArray which) => (int)which < Arrays.Length ? Arrays[(int)which] : [];
     public int Total(StatisticsArray which) => Array(which).Sum();
@@ -150,6 +145,9 @@ public sealed class ReplayStatistics
     public StatsDump? StatsPacket { get; set; }
 
     public GameRecord? Game { get; set; }
+
+    /// <summary>The process's loaded modules, to resolve a payment's absolute caller.</summary>
+    public List<ModuleInfo> Modules { get; } = [];
 
     public HouseSummary? ForHouse(int houseIndex) => Houses.FirstOrDefault(h => h.HouseIndex == houseIndex);
 }
@@ -212,6 +210,8 @@ public static class StatisticsSectionReader
                 problem = ReadHouses(chunk, stats);
             else if (tag == ReplayFormat.ChunkGame)
                 problem = ReadGame(chunk, stats);
+            else if (tag == ReplayFormat.ChunkModules)
+                problem = ReadModules(chunk, stats);
             else if (tag == ReplayFormat.ChunkStatsPacket)
             {
                 stats.StatsPacketBytes = bytes.AsSpan(chunk.Position, (int)length).ToArray();
@@ -306,8 +306,26 @@ public static class StatisticsSectionReader
                 Score = I(118),
                 UnitsKilledOfHouse = Twenty(122),
                 BuildingsKilledOfHouse = Twenty(202),
-                Income = Enumerable.Range(0, ReplayFormat.IncomeSourceCount).Select(i => I(282 + i * 4)).ToArray(),
                 Arrays = arrays,
+            });
+        }
+        return null;
+    }
+
+    private static string? ReadModules(Cursor c, ReplayStatistics stats)
+    {
+        if (!c.TryU32(out uint count) || count > 4096) return "module count";
+        for (int i = 0; i < count; i++)
+        {
+            if (!c.TryU32(out uint moduleBase) || !c.TryU32(out uint size) || !c.TryU32(out uint stamp)
+                || !c.TryU16(out ushort nameLength) || nameLength > 260 || !c.TryBytes(nameLength * 2, out var name))
+                return $"module {i}";
+            stats.Modules.Add(new ModuleInfo
+            {
+                Name = Encoding.Unicode.GetString(name),
+                Base = moduleBase,
+                Size = size,
+                TimeDateStamp = stamp,
             });
         }
         return null;

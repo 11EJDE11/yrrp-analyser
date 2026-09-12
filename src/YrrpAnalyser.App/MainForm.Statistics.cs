@@ -6,12 +6,144 @@ namespace YrrpAnalyser.App;
 internal sealed partial class MainForm
 {
     private StatisticsAnalysis? _statistics;
+    private readonly List<TimeSeriesChart> _timelineCharts = [];
+    private string? _pinnedTitle;
+
+    private static string HouseKey(int houseIndex) => $"house:{houseIndex}";
+
+    /// <summary>
+    /// Puts a copy of a chart above the scrolling page, on the same time axis, cursor and player
+    /// visibility as the rest, so it can be read against anything further down.
+    /// </summary>
+    private void PinChart(TimeSeriesChart source)
+    {
+        UnpinChart();
+        _statisticsPinned.Visible = true;
+        var pinned = new TimeSeriesChart
+        {
+            Title = source.Title,
+            ValueSuffix = source.ValueSuffix,
+            SimulationFps = source.SimulationFps,
+            TimeLabeller = source.TimeLabeller,
+            MinimumYRange = source.MinimumYRange,
+            Height = 220,
+            Dock = DockStyle.Top,
+        };
+        _statisticsPinned.Controls.Add(pinned);
+        pinned.SetData(source.Series.Select(s => new ChartSeries
+        {
+            Name = s.Name,
+            Color = s.Color,
+            Style = s.Style,
+            DashStyle = s.DashStyle,
+            Points = s.Points,
+            Key = s.Key,
+            Visible = s.Visible,
+        }), source.Markers);
+        pinned.SetViewRange(source.ViewMinFrame, source.ViewMaxFrame, propagate: false);
+        // Deferred: the chart would otherwise be disposed from inside its own mouse handler.
+        pinned.Buttons = [new ChartButton("Unpin", () => BeginInvoke(UnpinChart))];
+        pinned.SizeChanged += (_, _) => FitPinnedStrip();
+        _statisticsCharts.Add(pinned);
+        _pinnedTitle = source.Title;
+        FitPinnedStrip();
+    }
+
+    // The row of charts the user has hidden, each a button that brings it back.
+    private readonly FlowLayoutPanel _hiddenChartsBar = new()
+    {
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        WrapContents = true,
+        MaximumSize = new Size(960, 0),
+        BackColor = Theme.Background,
+        Margin = new Padding(0, 0, 0, 6),
+        Visible = false,
+    };
+
+    /// <summary>Hides or shows charts, remembers the choice by title, and redraws the hidden-charts row.</summary>
+    private void SetChartsHidden(IEnumerable<TimeSeriesChart> charts, bool hidden)
+    {
+        foreach (var chart in charts)
+        {
+            chart.Visible = !hidden;
+            _settings.HiddenCharts.Remove(chart.Title);
+            if (hidden) _settings.HiddenCharts.Add(chart.Title);
+        }
+        RefreshHiddenChartsBar();
+    }
+
+    private void RefreshHiddenChartsBar()
+    {
+        _hiddenChartsBar.SuspendLayout();
+        foreach (var old in _hiddenChartsBar.Controls.Cast<Control>().ToList())
+            old.Dispose();
+
+        var hidden = _timelineCharts.Where(c => !c.Visible).ToList();
+        if (hidden.Count > 0)
+        {
+            _hiddenChartsBar.Controls.Add(new Label
+            {
+                Text = "Hidden charts:",
+                AutoSize = true,
+                ForeColor = Theme.Muted,
+                Margin = new Padding(0, 6, 4, 0),
+            });
+            foreach (var chart in hidden)
+                _hiddenChartsBar.Controls.Add(HiddenChartButton(ShortTitle(chart.Title), [chart]));
+            if (hidden.Count > 1)
+                _hiddenChartsBar.Controls.Add(HiddenChartButton("Show all", hidden));
+        }
+        _hiddenChartsBar.Visible = hidden.Count > 0;
+        _hiddenChartsBar.ResumeLayout();
+    }
+
+    private Button HiddenChartButton(string text, List<TimeSeriesChart> charts)
+    {
+        var button = new Button { Text = text, AutoSize = true, Margin = new Padding(0, 0, 4, 4) };
+        // Deferred: showing a chart rebuilds this row, which disposes the button being clicked.
+        button.Click += (_, _) => BeginInvoke(() => SetChartsHidden(charts, false));
+        return button;
+    }
+
+    /// <summary>A chart title up to its first explanation: "Army size - vehicles, ..." is "Army size".</summary>
+    private static string ShortTitle(string title)
+    {
+        int cut = title.Length;
+        foreach (var separator in new[] { " - ", ", ", " (" })
+        {
+            int at = title.IndexOf(separator, StringComparison.Ordinal);
+            if (at > 0) cut = Math.Min(cut, at);
+        }
+        return title[..cut];
+    }
+
+    private void FitPinnedStrip()
+    {
+        if (_statisticsPinned.Controls.Count > 0)
+            _statisticsPinned.Height = _statisticsPinned.Controls[0].Height + _statisticsPinned.Padding.Vertical;
+    }
+
+    private void UnpinChart()
+    {
+        foreach (var chart in _statisticsPinned.Controls.OfType<TimeSeriesChart>().ToList())
+        {
+            _statisticsCharts.Remove(chart);
+            chart.Dispose();
+        }
+        _statisticsPinned.Visible = false;
+        _pinnedTitle = null;
+    }
 
     private void PopulateStatistics(ReplayDocument doc, StatisticsAnalysis analysis)
     {
+        // A pinned chart comes back, by title, from the new analysis once the charts exist again.
+        string? pinnedTitle = _pinnedTitle;
+        UnpinChart();
         _statisticsFlow.SuspendLayout();
         _statisticsFlow.Controls.Clear();
         _statisticsCharts.Clear();
+        _timelineCharts.Clear();
 
         var stats = doc.Statistics;
         if (!analysis.HasTimeline && stats is null)
@@ -28,26 +160,58 @@ internal sealed partial class MainForm
 
         _statisticsFlow.Controls.Add(SectionHeading("Result"));
         _statisticsFlow.Controls.Add(Note(
-            "Everything here is the engine's own house counters, read by the recorder - not reconstructed " +
-            "from the orders. Income is money gained from any source (harvesting, oil derricks, selling, " +
-            "refunds): the change in money on hand plus the change in credits spent." +
-            (stats is null ? " This recording has no statistics section - it did not close cleanly - so the " +
+            "Money left - cash plus ore still waiting in refineries and silos at the end.\n" +
+            "Income - everything earned during the game; the table below splits it up.\n" +
+            "Spent (net) - money spent on building and repairs, less refunds for production that was cancelled.\n" +
+            "Peak army - the most this player's vehicles, infantry and aircraft were worth at any one time.\n" +
+            "Built - everything that joined the player: produced, deployed, captured or mind controlled.\n" +
+            "Killed - other players' units or buildings this player destroyed. Lost - this player's own destroyed.\n" +
+            "Captured - buildings taken with engineers. Crates - crates picked up. Score - the game's own score." +
+            (stats is null ? "\nThis recording has no statistics section - it did not close cleanly - so the " +
                              "last timeline sample stands in for the end of the game." : ""),
             Theme.Muted));
         if (stats?.Game is { } game)
             _statisticsFlow.Controls.Add(FactGrid(GameFacts(doc, game), columns: 3));
         _statisticsFlow.Controls.Add(BuildResultTable(doc, analysis));
 
-        if (analysis.HasIncomeSources || stats?.Houses.Any(h => h.IncomeTotal != 0) == true)
+        if (analysis.HasIncomeSources)
         {
             _statisticsFlow.Controls.Add(SectionHeading("Where the money came from"));
-            _statisticsFlow.Controls.Add(Note(
-                "Counted by the recorder at HouseClass::Refund_Money, the one function every kind of income " +
-                "reaches the balance through, by the call site it came from. Harvested is ore and gems unloaded " +
-                "at a refinery; buildings is oil derricks and capture bonuses; stolen is a spy in a refinery or a " +
-                "money drain. The game's own harvested counter (the packet's HRV) is never updated in YR.",
-                Theme.Muted));
+            _statisticsFlow.Controls.Add(Note(IncomeLegend(analysis), Theme.Muted));
             _statisticsFlow.Controls.Add(BuildIncomeTable(doc, analysis));
+
+            if (analysis.Unclassified.Count > 0)
+            {
+                _statisticsFlow.Controls.Add(SectionHeading($"Money the analyser does not recognise ({analysis.Unclassified.Count})"));
+                _statisticsFlow.Controls.Add(Note(
+                    "What makes up the Unclassified column: payments from places in the game or its DLLs the income " +
+                    "table has no entry for yet - usually after an Ares or Phobos update. Add them with Edit income " +
+                    "table, using the details shown here, then Reload.",
+                    Theme.Warning));
+                _statisticsFlow.Controls.Add(BuildIncomeTableButtons());
+                _statisticsFlow.Controls.Add(BuildUnclassifiedView(doc, analysis));
+            }
+            else
+            {
+                _statisticsFlow.Controls.Add(BuildIncomeTableButtons());
+            }
+        }
+
+        if (stats is { Houses.Count: > 0 })
+        {
+            _statisticsFlow.Controls.Add(SectionHeading("Built, destroyed and left standing"));
+            _statisticsFlow.Controls.Add(Note(
+                "Every player sits under the same row of pictures, so each type's counts line up. Types are grouped " +
+                "by side - Soviet, then Allied, then Yuri, then anything else - by whichever side owned most of them " +
+                "in this game, and players are listed in the same order; a player with none of a side's types is " +
+                "left out of that group. Hover a count for what it was worth.\n" +
+                "Built - everything that joined the player: produced, deployed, captured or mind controlled.\n" +
+                "Destroyed - other players' things this player destroyed. Lost - this player's own, destroyed.\n" +
+                "Left at the end - what the player still had when the recording closed. Captured - buildings taken " +
+                "with engineers." +
+                (stats.Types.HasData ? "" : "\nThe recording carries no type table, so types show by array position."),
+                Theme.Muted));
+            AddCameoMatrix(doc, stats);
         }
 
         if (analysis.HasTimeline)
@@ -55,17 +219,6 @@ internal sealed partial class MainForm
 
         if (stats is { Houses.Count: > 0 })
         {
-            _statisticsFlow.Controls.Add(SectionHeading("Built, destroyed and left standing"));
-            _statisticsFlow.Controls.Add(Note(
-                "Per type, from the same counters the game's statistics packet reports. \"Built\" is every " +
-                "object that joined the house - produced, deployed, captured or mind controlled - which is how " +
-                "the game counts it. \"Lost\" is counted by the recorder, on the same condition the game counts " +
-                "its lost totals on; the game keeps no per-type count of its own. \"Left at the end\" is what the " +
-                "house still owned when the recording closed." +
-                (stats.Types.HasData ? "" : " The recording carries no type table, so types show by array position."),
-                Theme.Muted));
-            _statisticsFlow.Controls.Add(BuildCameoTabs(doc, stats));
-
             _statisticsFlow.Controls.Add(SectionHeading("Kills by opponent"));
             _statisticsFlow.Controls.Add(Note(
                 "Units / buildings of the column's house destroyed by the row's house.", Theme.Muted));
@@ -93,6 +246,9 @@ internal sealed partial class MainForm
 
         FitWidths(_statisticsFlow);
         _statisticsFlow.ResumeLayout();
+
+        if (_timelineCharts.FirstOrDefault(c => c.Title == pinnedTitle) is { } again)
+            PinChart(again);
     }
 
     private static Label Note(string text, Color color) => new()
@@ -110,13 +266,14 @@ internal sealed partial class MainForm
         if (doc.Statistics is { } stats)
         {
             foreach (var h in stats.Houses)
-                if ((h.Flags & HouseStatsFlags.Observer) == 0) houses.Add(h.HouseIndex);
+                houses.Add(h.HouseIndex);
         }
         return [.. houses];
     }
 
-    private static string ResultText(ReplayDocument doc, HouseStatsFlags flags, int? defeatedAt)
+    private static string ResultText(ReplayDocument doc, HouseStatsFlags flags, int? defeatedAt, bool spectator)
     {
+        if (spectator) return "Spectator";
         if ((flags & HouseStatsFlags.Winner) != 0) return "Won";
         if ((flags & HouseStatsFlags.Resigned) != 0) return "Resigned";
         if ((flags & HouseStatsFlags.LostConnection) != 0) return "Disconnected";
@@ -128,7 +285,7 @@ internal sealed partial class MainForm
     private Control BuildResultTable(ReplayDocument doc, StatisticsAnalysis analysis)
     {
         var view = MakeListView(("Player", 150), ("Country", 100), ("Result", 130), ("Money left", 80),
-            ("Income", 80), ("Spent", 80), ("Peak army", 80), ("Units built", 75), ("Units killed", 75),
+            ("Income", 80), ("Spent (net)", 80), ("Peak army", 80), ("Units built", 75), ("Units killed", 75),
             ("Units lost", 70), ("Bldgs built", 75), ("Bldgs killed", 75), ("Bldgs lost", 70),
             ("Captured", 65), ("Crates", 55), ("Score", 70));
         view.Dock = DockStyle.None;
@@ -151,10 +308,10 @@ internal sealed partial class MainForm
             var item = new ListViewItem([
                 StatisticsAnalysis.HouseName(doc, house),
                 summary?.Country ?? doc.Roster.ForHouse(house)?.SideName ?? "",
-                ResultText(doc, flags, timeline?.DefeatedAtFrame),
+                ResultText(doc, flags, timeline?.DefeatedAtFrame, analysis.IsSpectator(house, flags)),
                 N(summary is not null ? summary.Credits + summary.StoredOreValue : last?.CreditsOnHand),
                 N(timeline?.TotalIncome),
-                N(summary?.CreditsSpent ?? last?.CreditsSpent),
+                N(timeline?.NetSpent ?? summary?.CreditsSpent),
                 N(timeline?.PeakArmyValue),
                 N(Built(StatisticsArray.BuiltUnits, StatisticsArray.BuiltInfantry, StatisticsArray.BuiltAircraft) ?? last?.UnitsBuilt),
                 N(summary?.UnitsKilled ?? last?.UnitsKilled),
@@ -196,50 +353,158 @@ internal sealed partial class MainForm
         ];
     }
 
-    private static readonly (IncomeSource Source, string Title)[] IncomeColumns =
-    [
-        (IncomeSource.Harvested, "Harvested"),
-        (IncomeSource.Buildings, "Buildings"),
-        (IncomeSource.Sold, "Sold"),
-        (IncomeSource.Refunded, "Refunded"),
-        (IncomeSource.Crates, "Crates"),
-        (IncomeSource.Stolen, "Stolen"),
-        (IncomeSource.Other, "Other"),
-    ];
-
-    private Control BuildIncomeTable(ReplayDocument doc, StatisticsAnalysis analysis)
+    private static string IncomeTitle(IncomeSource source) => source switch
     {
+        IncomeSource.Refunded => "Refunded*",
+        IncomeSource.StartingCredits => "Starting bonus*",
+        _ => source.ToString(),
+    };
+
+    private static string IncomeMeaning(IncomeSource source) => source switch
+    {
+        IncomeSource.Harvested => "ore and gems unloaded by harvesters and slave miners.",
+        IncomeSource.Buildings => "oil derricks and other buildings that make money, and the bonus for capturing one.",
+        IncomeSource.Sold => "buildings and units sold.",
+        IncomeSource.Refunded => "money back for production cancelled part-way through. It was never really spent, " +
+                                 "so it is not income, and it is taken off Spent.",
+        IncomeSource.StartingCredits => "the extra money AI players get at the start, on top of the game's starting " +
+                                        "credits, which grows with their difficulty. Not income.",
+        IncomeSource.Grinding => "units sent into a Grinder.",
+        IncomeSource.Crates => "money crates.",
+        IncomeSource.Stolen => "taken from other players: a spy in a refinery, or a money drain.",
+        IncomeSource.Bounty => "bounties paid for kills.",
+        IncomeSource.Superweapon => "superweapons that give money.",
+        IncomeSource.Warhead => "weapons that give money when they hit.",
+        IncomeSource.Other => "anything else that pays out, such as a building's upgrades refunded when it is captured.",
+        IncomeSource.Unclassified => "money the analyser does not recognise yet - see the list below.",
+        _ => "",
+    };
+
+    /// <summary>Only the sources anyone actually received, in the enum's order.</summary>
+    private static List<IncomeSource> ShownIncomeSources(StatisticsAnalysis analysis) =>
+        Enum.GetValues<IncomeSource>().Where(s => analysis.Houses.Any(h => h.IncomeFrom(s) != 0)).ToList();
+
+    private static bool ShowsDirectIncome(StatisticsAnalysis analysis) =>
+        analysis.Houses.Any(h => Math.Abs(h.DirectIncome) >= 1);
+
+    /// <summary>What each column of the income table means, for the columns it actually shows.</summary>
+    private static string IncomeLegend(StatisticsAnalysis analysis)
+    {
+        var lines = ShownIncomeSources(analysis).Select(s => $"{IncomeTitle(s)} - {IncomeMeaning(s)}").ToList();
+        if (ShowsDirectIncome(analysis))
+            lines.Add("Direct - money that arrived without a payment the game records, such as ore stored in silos.");
+        lines.Add("Income - the total earned: every column added up, apart from those marked *.");
+        lines.Add($"Harvest peak /min - the fastest this player harvested over any {StatisticsAnalysis.IncomeRateWindowSeconds:0} " +
+                  "seconds, as a rate per minute.");
+        return string.Join("\n", lines);
+    }
+
+    private static Control BuildIncomeTable(ReplayDocument doc, StatisticsAnalysis analysis)
+    {
+        // Refunded and the starting bonus stay visible even though they are not income: refunds are what
+        // makes Spent (net) differ from the raw counter, and the bonus is where an AI's money came from.
+        var sources = ShownIncomeSources(analysis);
+        bool showDirect = ShowsDirectIncome(analysis);
+
         var columns = new List<(string, int)> { ("Player", 150) };
-        columns.AddRange(IncomeColumns.Select(c => (c.Title, 90)));
-        columns.Add(("Total", 100));
+        columns.AddRange(sources.Select(s => (IncomeTitle(s), 90)));
+        if (showDirect) columns.Add(("Direct", 80));
+        columns.Add(("Income", 100));
         columns.Add(("Harvest peak /min", 120));
 
         var view = MakeListView([.. columns]);
+        view.Dock = DockStyle.None;
+        view.Width = 980;
+        view.Margin = new Padding(0, 0, 0, 4);
+        view.Font = Theme.Mono;
+        FillWidth(view);
+
+        foreach (var t in analysis.Houses)
+        {
+            var cells = new List<string> { t.Name };
+            cells.AddRange(sources.Select(s => t.IncomeFrom(s).ToString("N0")));
+            if (showDirect) cells.Add(t.DirectIncome.ToString("N0"));
+            cells.Add(t.TotalIncome.ToString("N0"));
+            cells.Add(t.PeakHarvestRate.ToString("N0"));
+
+            var item = new ListViewItem([.. cells]) { UseItemStyleForSubItems = false };
+            item.SubItems[0].ForeColor = Theme.ForHouse(t.HouseIndex);
+            for (int i = 0; i < sources.Count; i++)
+                if (!StatisticsAnalysis.IsIncome(sources[i])) item.SubItems[i + 1].ForeColor = Theme.Muted;
+            int unclassifiedColumn = sources.IndexOf(IncomeSource.Unclassified);
+            if (unclassifiedColumn >= 0) item.SubItems[unclassifiedColumn + 1].ForeColor = Theme.Warning;
+            view.Items.Add(item);
+        }
+
+        view.Height = 30 + Math.Max(1, analysis.Houses.Count) * 22;
+        return view;
+    }
+
+    private Control BuildIncomeTableButtons()
+    {
+        var row = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 0, 10),
+            BackColor = Theme.Background,
+        };
+        var edit = new Button { Text = "Edit income table...", AutoSize = true, Margin = new Padding(0, 0, 6, 0) };
+        var reload = new Button { Text = "Reload income table", AutoSize = true, Margin = new Padding(0, 0, 6, 0) };
+        edit.Click += (_, _) => EditIncomeTable();
+        reload.Click += (_, _) => ReloadIncomeTable();
+        row.Controls.Add(edit);
+        row.Controls.Add(reload);
+        return row;
+    }
+
+    private static Control BuildUnclassifiedView(ReplayDocument doc, StatisticsAnalysis analysis)
+    {
+        var view = MakeListView(("Caller", 220), ("Build", 110), ("Amount", 110), ("Payments", 80), ("Players", 400));
         view.Dock = DockStyle.None;
         view.Width = 980;
         view.Margin = new Padding(0, 0, 0, 10);
         view.Font = Theme.Mono;
         FillWidth(view);
 
-        var houses = StatisticsHouses(doc, analysis);
-        foreach (int house in houses)
+        foreach (var u in analysis.Unclassified)
         {
-            var summary = doc.Statistics?.ForHouse(house);
-            var timeline = analysis.Houses.FirstOrDefault(h => h.HouseIndex == house);
-            int Amount(IncomeSource s) => summary?.IncomeFrom(s) ?? timeline?.Last.Income(s) ?? 0;
-
-            var cells = new List<string> { StatisticsAnalysis.HouseName(doc, house) };
-            cells.AddRange(IncomeColumns.Select(c => Amount(c.Source).ToString("N0")));
-            cells.Add(IncomeColumns.Sum(c => Amount(c.Source)).ToString("N0"));
-            cells.Add(timeline is null ? "—" : timeline.PeakHarvestRate.ToString("N0"));
-
-            var item = new ListViewItem([.. cells]) { UseItemStyleForSubItems = false };
-            item.SubItems[0].ForeColor = Theme.ForHouse(house);
-            view.Items.Add(item);
+            view.Items.Add(new ListViewItem([
+                u.Caller.ToString(),
+                u.Caller.TimeDateStamp == 0 ? "—" : $"0x{u.Caller.TimeDateStamp:X8}",
+                u.Amount.ToString("N0"),
+                u.Payments.ToString("N0"),
+                string.Join(", ", u.Houses.Select(h => StatisticsAnalysis.HouseName(doc, h))),
+            ]));
         }
 
-        view.Height = 30 + Math.Max(1, houses.Count) * 22;
+        view.Height = Math.Min(30 + analysis.Unclassified.Count * 20, 300);
         return view;
+    }
+
+    /// <summary>Opens the income table overrides file, creating it from the built-in table first.</summary>
+    private void EditIncomeTable()
+    {
+        var path = IncomeClassifier.OverridesPath;
+        try
+        {
+            if (!File.Exists(path))
+                File.WriteAllText(path, IncomeClassifier.ToJson(IncomeClassifier.BuiltIn));
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            SetStatus($"Editing {path}. Reload the income table when you have saved it.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, ex.Message, "Could not open the income table", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ReloadIncomeTable()
+    {
+        IncomeClassifier.Reload();
+        if (_doc is not null) Analyse(_doc);
+        SetStatus($"Reloaded the income table ({IncomeClassifier.Default.Rules.Count} callers).");
     }
 
     private static Control BuildSuperweaponView(ReplayDocument doc, List<SuperweaponUse> uses)
@@ -278,20 +543,29 @@ internal sealed partial class MainForm
         _statisticsFlow.Controls.Add(Note(
             $"Every house sampled every {ReplayFormat.HouseStatsIntervalFrames} frames " +
             $"({doc.HouseStatsFrameCount:N0} samples). Dotted lines mark a house being defeated. " +
-            "Army value is the summed cost of every vehicle, infantry and aircraft the house has on the field.",
+            "Army value is the summed cost of every vehicle, infantry and aircraft the house has on the field. " +
+            "Spectators are left off, since they own nothing.",
             Theme.Muted));
         _statisticsFlow.Controls.Add(ChartHint());
+        _statisticsFlow.Controls.Add(Note(
+            "Pin to top keeps a chart above the page while you scroll, to read it against any other chart or table. " +
+            "Hide puts a chart away; it waits in the row below until you click it to bring it back. " +
+            "Hiding or isolating a player on one chart does it on all of them.",
+            Theme.Muted));
+        _statisticsFlow.Controls.Add(_hiddenChartsBar);
 
-        var markers = analysis.Houses
+        var players = analysis.Houses.Where(h => !h.IsSpectator).ToList();
+        var markers = players
             .Where(h => h.DefeatedAtFrame.HasValue)
             .Select(h => new ChartMarker(h.DefeatedAtFrame!.Value, Theme.ForHouse(h.HouseIndex), $"{h.Name} defeated"))
             .ToList();
 
         IEnumerable<ChartSeries> Per(Func<HouseTimeline, List<Sample>> pick, SeriesStyle style = SeriesStyle.Line) =>
-            analysis.Houses.Select(h => new ChartSeries
+            players.Select(h => new ChartSeries
             {
                 Name = h.Name,
                 Color = Theme.ForHouse(h.HouseIndex),
+                Key = HouseKey(h.HouseIndex),
                 Style = style,
                 Points = pick(h),
             });
@@ -307,36 +581,48 @@ internal sealed partial class MainForm
                 Width = 980,
                 Height = 220,
                 Margin = new Padding(0, 4, 0, 10),
+                Visible = !_settings.HiddenCharts.Contains(title),
             };
             chart.SetData(series, markers);
+            chart.Buttons =
+            [
+                new ChartButton("Pin to top", () => PinChart(chart)),
+                // Deferred, like every button here that changes the layout under the pointer.
+                new ChartButton("Hide", () => BeginInvoke(() => SetChartsHidden([chart], true))),
+            ];
             _statisticsCharts.Add(chart);
+            _timelineCharts.Add(chart);
             _statisticsFlow.Controls.Add(FillWidth(chart));
         }
 
+        // The overall picture first - money, army, power and the fighting - then the economy in detail,
+        // the base, and production and score last.
         Chart("Money on hand - credits plus the ore waiting in refineries and silos", Per(h => h.CreditsOnHand), 1000);
-        Chart("Income, total so far", Per(h => h.Income), 1000);
-        Chart($"Income per minute, over the last {StatisticsAnalysis.IncomeRateWindowSeconds:0} seconds", Per(h => h.IncomeRate), 500);
-        if (analysis.HasHarvestData)
-        {
-            Chart("Harvested - ore and gems unloaded at refineries", Per(h => h.Harvested), 1000);
-            Chart($"Harvest per minute, over the last {StatisticsAnalysis.IncomeRateWindowSeconds:0} seconds", Per(h => h.HarvestRate), 500);
-        }
-        Chart("Credits spent", Per(h => h.Spent), 1000);
         Chart("Army value", Per(h => h.ArmyValue), 1000);
         Chart("Army size - vehicles, infantry and aircraft", Per(h => h.ArmySize, SeriesStyle.Step), 5);
-        Chart("Base value - summed cost of every building", Per(h => h.BuildingValue), 1000);
-        Chart("Buildings", Per(h => h.BuildingCount, SeriesStyle.Step), 5);
-        Chart("Power produced (solid) and used (step)",
-            analysis.Houses.SelectMany(h => new[]
+        Chart("Power produced (solid) and used (dashed)",
+            players.SelectMany(h => new[]
             {
-                new ChartSeries { Name = h.Name, Color = Theme.ForHouse(h.HouseIndex), Style = SeriesStyle.Line, Points = h.PowerOutput },
-                new ChartSeries { Name = $"{h.Name} used", Color = Theme.Blend(Theme.ForHouse(h.HouseIndex), Color.White, 0.45),
-                                  Style = SeriesStyle.Step, Points = h.PowerDrain },
+                new ChartSeries { Name = h.Name, Color = Theme.ForHouse(h.HouseIndex), Key = HouseKey(h.HouseIndex),
+                                  Style = SeriesStyle.Line, Points = h.PowerOutput },
+                new ChartSeries { Name = $"{h.Name} used", Color = Theme.ForHouse(h.HouseIndex), Key = HouseKey(h.HouseIndex),
+                                  Style = SeriesStyle.Step, DashStyle = System.Drawing.Drawing2D.DashStyle.Dash, Points = h.PowerDrain },
             }), 100);
         Chart("Kills - units and buildings destroyed", Per(h => h.Kills, SeriesStyle.Step), 5);
         Chart("Losses - units and buildings lost", Per(h => h.Losses, SeriesStyle.Step), 5);
+        Chart($"Income per minute, over the last {StatisticsAnalysis.IncomeRateWindowSeconds:0} seconds", Per(h => h.IncomeRate), 500);
+        Chart("Income, total so far", Per(h => h.Income), 1000);
+        if (analysis.HasHarvestData)
+        {
+            Chart($"Harvest per minute, over the last {StatisticsAnalysis.IncomeRateWindowSeconds:0} seconds", Per(h => h.HarvestRate), 500);
+            Chart("Harvested - ore and gems unloaded at refineries and slave miners", Per(h => h.Harvested), 1000);
+        }
+        Chart("Credits spent, less refunds of cancelled production", Per(h => h.Spent), 1000);
+        Chart("Base value - summed cost of every building", Per(h => h.BuildingValue), 1000);
+        Chart("Buildings", Per(h => h.BuildingCount, SeriesStyle.Step), 5);
         Chart("Units built", Per(h => h.UnitsBuilt, SeriesStyle.Step), 5);
         Chart("Score", Per(h => h.Score, SeriesStyle.Step), 100);
+        RefreshHiddenChartsBar();
     }
 
     private static readonly (string Title, StatisticsArray[] Arrays)[] CameoGroups =
@@ -348,54 +634,85 @@ internal sealed partial class MainForm
         ("Captured", [StatisticsArray.CapturedBuildings]),
     ];
 
-    private static Control BuildCameoTabs(ReplayDocument doc, ReplayStatistics stats)
+    // Which view of the per-type counts was last chosen, kept when another recording is opened.
+    private string _cameoView = "Built";
+
+    /// <summary>
+    /// The per-type counts, one view at a time - built, destroyed and the rest - picked with a row of
+    /// buttons above one grid that stacks every player under the same cameos.
+    /// </summary>
+    private void AddCameoMatrix(ReplayDocument doc, ReplayStatistics stats)
     {
-        var tabs = new TabControl { Width = 980, Height = 480, Margin = new Padding(0, 0, 0, 10) };
-        FillWidth(tabs);
+        Faction FactionOf(HouseSummary house) => Factions.OfHouse(doc, house);
+        CameoRow Row(int house, int[] counts) =>
+            new(StatisticsAnalysis.HouseName(doc, house), Theme.ForHouse(house), counts);
 
-        foreach (var house in stats.Houses.Where(h => (h.Flags & HouseStatsFlags.Observer) == 0).OrderBy(h => h.HouseIndex))
+        var views = CameoGroups
+            .Select(group => (group.Title, Blocks: Factions.Blocks(stats.Houses, stats.Types, FactionOf, group.Arrays)
+                .Select(b => new CameoBlock(Factions.Title(b.Faction), b.Columns,
+                    b.Rows.Select(r => Row(r.HouseIndex, r.Counts)).ToList()))
+                .ToList()))
+            .Append(("Crates", CrateBlocks(stats, FactionOf, Row)))
+            .ToList();
+
+        var matrix = FillWidth(new CameoMatrix { Width = 980, Margin = new Padding(0, 0, 0, 10) });
+        var selector = new FlowLayoutPanel
         {
-            var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Panel, Padding = new Padding(10, 6, 10, 6) };
-            var grids = new List<Control>();
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            MaximumSize = new Size(960, 0),
+            BackColor = Theme.Background,
+            Margin = new Padding(0, 0, 0, 4),
+        };
 
-            foreach (var (title, arrays) in CameoGroups)
+        RadioButton? initial = null;
+        foreach (var (title, blocks) in views)
+        {
+            int total = blocks.Sum(b => b.Rows.Sum(r => r.Counts.Sum()));
+            var button = new RadioButton
             {
-                var items = arrays.SelectMany(a => CameoItems(stats.Types, a, house.Array(a)))
-                    .OrderByDescending(i => i.Count).ToList();
-                grids.Add(new CameoGrid { Caption = $"{title}  ({items.Sum(i => i.Count):N0})", Dock = DockStyle.Top }.WithItems(items));
-            }
-
-            var crates = house.Array(StatisticsArray.CollectedCrates);
-            var crateItems = crates.Select((count, i) => (count, i)).Where(c => c.count > 0)
-                .Select(c => new CameoItem($"crate{c.i}", "", CrateName(c.i), c.count, 0)).ToList();
-            grids.Add(new CameoGrid { Caption = $"Crates  ({crateItems.Sum(i => i.Count):N0})", Dock = DockStyle.Top }.WithItems(crateItems));
-
-            // Dock.Top stacks the last one added on top.
-            for (int i = grids.Count - 1; i >= 0; i--) panel.Controls.Add(grids[i]);
-
-            tabs.TabPages.Add(new TabPage(StatisticsAnalysis.HouseName(doc, house.HouseIndex))
+                Text = $"{title}  ({total:N0})",
+                Appearance = Appearance.Button,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 4, 0),
+            };
+            button.CheckedChanged += (_, _) =>
             {
-                Controls = { panel },
-                BackColor = Theme.Panel,
-            });
+                if (!button.Checked) return;
+                _cameoView = title;
+                matrix.SetBlocks(blocks);
+            };
+            selector.Controls.Add(button);
+            if (initial is null || title == _cameoView) initial = button;
         }
 
-        if (tabs.TabPages.Count == 0)
-            tabs.TabPages.Add(new TabPage("No players") { BackColor = Theme.Panel });
-        return tabs;
+        _statisticsFlow.Controls.Add(selector);
+        _statisticsFlow.Controls.Add(matrix);
+        if (initial is not null) initial.Checked = true;
     }
 
-    private static IEnumerable<CameoItem> CameoItems(TypeTable types, StatisticsArray which, int[] counts)
+    /// <summary>Crates picked up, as one block: a column per crate kind anyone collected.</summary>
+    private static List<CameoBlock> CrateBlocks(ReplayStatistics stats, Func<HouseSummary, Faction> factionOf,
+        Func<int, int[], CameoRow> row)
     {
-        var kind = HouseSummary.KindOf(which);
-        for (int i = 0; i < counts.Length; i++)
+        static int CrateCount(HouseSummary house, int kind)
         {
-            if (counts[i] <= 0) continue;
-            var info = types.Get(kind, i);
-            string fallback = $"{kind}#{i}";
-            yield return new CameoItem(info?.Id ?? fallback, info?.Cameo ?? "", info?.DisplayName ?? fallback,
-                counts[i], info?.Cost ?? 0);
+            var counts = house.Array(StatisticsArray.CollectedCrates);
+            return kind < counts.Length ? counts[kind] : 0;
         }
+
+        int length = stats.Houses.Select(h => h.Array(StatisticsArray.CollectedCrates).Length).DefaultIfEmpty(0).Max();
+        var kinds = Enumerable.Range(0, length).Where(k => stats.Houses.Any(h => CrateCount(h, k) > 0)).ToList();
+        if (kinds.Count == 0) return [];
+
+        var rows = stats.Houses.OrderBy(factionOf).ThenBy(h => h.HouseIndex)
+            .Select(h => (House: h, Counts: kinds.Select(k => CrateCount(h, k)).ToArray()))
+            .Where(r => r.Counts.Any(n => n > 0))
+            .Select(r => row(r.House.HouseIndex, r.Counts))
+            .ToList();
+        var columns = kinds.Select(k => new TypeColumn(AbstractType.None, k, $"crate{k}", "", CrateName(k), 0)).ToList();
+        return [new CameoBlock("Crates", columns, rows)];
     }
 
     /// <summary>Crate kinds, by the Powerup enum index the game counts them under.</summary>
@@ -412,7 +729,7 @@ internal sealed partial class MainForm
 
     private static Control BuildKillMatrix(ReplayDocument doc, ReplayStatistics stats)
     {
-        var houses = stats.Houses.Where(h => (h.Flags & HouseStatsFlags.Observer) == 0).OrderBy(h => h.HouseIndex).ToList();
+        var houses = stats.Houses.OrderBy(h => h.HouseIndex).ToList();
 
         var columns = new List<(string, int)> { ("Destroyed by", 150) };
         columns.AddRange(houses.Select(h => (Short(StatisticsAnalysis.HouseName(doc, h.HouseIndex)), 100)));

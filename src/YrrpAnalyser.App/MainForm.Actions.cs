@@ -311,6 +311,7 @@ internal sealed partial class MainForm
             Exporters.WriteFrameCrcCsv($"{stem}.frames.csv", doc);
             Exporters.WriteSummaryJson($"{stem}.summary.json", doc, _network, _activity);
             Exporters.WriteHouseStatsCsv($"{stem}.house-stats.csv", doc);
+            Exporters.WriteMoneyInCsv($"{stem}.money-in.csv", doc);
             File.WriteAllText($"{stem}.spawn.ini", doc.SpawnIniText);
             File.WriteAllText($"{stem}.spawnmap.ini", doc.SpawnMapText);
             if (doc.Statistics?.StatsPacketBytes is { } packet)

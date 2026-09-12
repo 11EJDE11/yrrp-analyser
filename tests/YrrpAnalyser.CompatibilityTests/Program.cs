@@ -7,9 +7,9 @@ using YrrpAnalyser;
 // These fixtures deliberately use numeric wire offsets and flags from the C++ format, never
 // ReplayFormat constants: changing the parser's layout must not silently change its test input.
 int passed = 0, failed = 0;
-Run("all 1024 frame flag combinations preserve block and event alignment", () =>
+Run("all 2048 frame flag combinations preserve block and event alignment", () =>
 {
-    for (uint flags = 0; flags < 1024; flags++)
+    for (uint flags = 0; flags < 2048; flags++)
     {
         var doc = Load(Fixture(Frames(w =>
         {
@@ -23,6 +23,7 @@ Run("all 1024 frame flag combinations preserve block and event alignment", () =>
             if ((flags & 64) != 0) w.Write(1);
             if ((flags & 256) != 0) { w.Write(2); w.Write(90u); w.Write(0xF1234567u); }
             if ((flags & 512) != 0) { w.Write(2); w.Write(HouseSample(0, 5000, 100)); w.Write(HouseSample(1, 7000, 0, flags: 1)); }
+            if ((flags & 1024) != 0) { w.Write(2); w.Write(MoneyInRecord(0, 0x4CA04B, 300)); w.Write(MoneyInRecord(3, 0x10544DCE, 1200)); }
             if ((flags & 16) != 0) { w.Write(3u); w.Write(new byte[] { 0xED, 0xAB, 0xCD }); }
             w.Write(Event(0x04, 3, 64, 0x12345678));
             w.Write(Event(0x1B, -1, 65, 0x87654321));
@@ -63,6 +64,9 @@ Run("all 1024 frame flag combinations preserve block and event alignment", () =>
             Equal(HouseStatsFlags.Defeated, f.HouseStats[1].Flags, "sample flags");
         }
         else Check(f.HouseStats is null, "absent house stats");
+        if ((flags & 1024) != 0)
+            Sequence(new[] { new MoneyIn(0, 0x4CA04B, 300), new MoneyIn(3, 0x10544DCE, 1200) }, f.MoneyIn, "payments");
+        else Check(f.MoneyIn is null, "absent payments");
         Sequence((flags & 16) != 0 ? new byte[] { 0xED, 0xAB, 0xCD } : null, f.Extension, "extension");
         Equal((flags & 16) != 0, doc.HasExtensionBlocks, "extension presence");
         var events = doc.EnumerateEvents().ToArray();
@@ -180,9 +184,11 @@ Run("invalid counts, speed, unknown flags, frame sequence, and end markers stop 
     invalid.Add(w => Frame(w, 2, 16385, 0));
     invalid.Add(w => Frame(w, 2, -1, 0));
     invalid.Add(w => Frame(w, -2, 0, 0));
-    invalid.Add(w => Frame(w, 2, 0, 1024));
+    invalid.Add(w => Frame(w, 2, 0, 2048));
     foreach (int n in new[] { -1, 0, 33 })
         invalid.Add(w => { Frame(w, 2, 0, 512); w.Write(n); });
+    foreach (int n in new[] { -1, 0, 1025 })
+        invalid.Add(w => { Frame(w, 2, 0, 1024); w.Write(n); });
     invalid.Add(w => Frame(w, 0, 0, 0));
     invalid.Add(w => Frame(w, 1, 0, 0));
     invalid.Add(w => { Frame(w, 2, 0, 16); w.Write(1048577u); });
@@ -326,16 +332,83 @@ Run("checkpoint archive after the frame stream: index, payload split, CRC, and s
     }
     finally { File.Delete(path); }
 });
+Run("per-type counts line up by side: Soviet, then Allied, then Yuri", () =>
+{
+    static HouseSummary House(int index, string country, params (StatisticsArray Array, int Index, int Count)[] counts)
+    {
+        var arrays = new int[18][];
+        for (int a = 0; a < arrays.Length; a++) arrays[a] = [];
+        foreach (var (array, i, n) in counts)
+        {
+            var list = arrays[(int)array];
+            if (list.Length <= i) System.Array.Resize(ref list, i + 1);
+            list[i] = n;
+            arrays[(int)array] = list;
+        }
+        return new HouseSummary { HouseIndex = index, Country = country, Arrays = arrays };
+    }
+
+    Equal(Faction.Soviet, Factions.OfCountry("Confederation"), "Cuba is Soviet");
+    Equal(Faction.Allied, Factions.OfCountry("Alliance"), "Korea is Allied");
+    Equal(Faction.Yuri, Factions.OfCountry("YuriCountry"), "Yuri's country");
+    Equal(Faction.Other, Factions.OfCountry("Neutral"), "anything else");
+
+    // Allied house 0 builds GIs (infantry 0) and Grizzlies (unit 1); Soviet house 1 Conscripts (infantry 1)
+    // and Rhinos (unit 2); Yuri house 2 Initiates (infantry 2) and mind-controls one Rhino; house 3 has nothing.
+    var houses = new[]
+    {
+        House(2, "YuriCountry", (StatisticsArray.BuiltUnits, 2, 1), (StatisticsArray.BuiltInfantry, 2, 4)),
+        House(0, "Americans", (StatisticsArray.BuiltInfantry, 0, 5), (StatisticsArray.BuiltUnits, 1, 2)),
+        House(1, "Russians", (StatisticsArray.BuiltInfantry, 1, 7), (StatisticsArray.BuiltUnits, 2, 3)),
+        House(3, "Neutral"),
+    };
+    var blocks = Factions.Blocks(houses, TypeTable.Empty, h => Factions.OfCountry(h.Country),
+        [StatisticsArray.BuiltUnits, StatisticsArray.BuiltInfantry, StatisticsArray.BuiltAircraft, StatisticsArray.BuiltBuildings]);
+    Sequence(new[] { Faction.Soviet, Faction.Allied, Faction.Yuri }, blocks.Select(b => b.Faction).ToArray(), "blocks in side order");
+    var soviet = blocks[0];
+    Sequence(new[] { "InfantryType#1", "UnitType#2" }, soviet.Columns.Select(c => c.Id).ToArray(),
+        "infantry before vehicles; the Rhino stays Soviet despite Yuri's one");
+    Sequence(new[] { 1, 2 }, soviet.Rows.Select(r => r.HouseIndex).ToArray(), "the Soviet player first, then Yuri with the Rhino");
+    Sequence(new[] { 7, 3 }, soviet.Rows[0].Counts, "Soviet counts");
+    Sequence(new[] { 0, 1 }, soviet.Rows[1].Counts, "zero where Yuri has no Conscripts, so the Rhino lines up");
+    Check(blocks.All(b => b.Rows.All(r => r.Counts.Length == b.Columns.Count)), "every row covers every column");
+    Check(blocks.SelectMany(b => b.Rows).All(r => r.HouseIndex != 3), "a house with nothing is left out");
+});
+
+Run("a defeated player who stays to watch is still a player; a spectator from the start is not", () =>
+{
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 0, 0, 512); w.Write(2);
+        w.Write(HouseSample(0, 10000, 0)); w.Write(HouseSample(1, 10000, 0, flags: (uint)HouseStatsFlags.Observer));
+        Frame(w, 60, 0, 512); w.Write(2);
+        w.Write(HouseSample(0, 0, 10000, flags: (uint)(HouseStatsFlags.Defeated | HouseStatsFlags.Observer)));
+        w.Write(HouseSample(1, 10000, 0, flags: (uint)HouseStatsFlags.Observer));
+        End(w);
+    })));
+    var analysis = StatisticsAnalysis.Build(doc);
+    Equal(2, analysis.Houses.Count, "spectators are kept");
+    Check(!analysis.IsSpectator(0, HouseStatsFlags.Defeated | HouseStatsFlags.Observer), "defeated player watching on");
+    Check(analysis.IsSpectator(1, HouseStatsFlags.Observer), "spectator from the start");
+    Check(!analysis.IsSpectator(2, HouseStatsFlags.Defeated | HouseStatsFlags.Observer), "unsampled house, defeated");
+    Check(analysis.IsSpectator(3, HouseStatsFlags.Observer), "unsampled house, never defeated");
+});
+
 Run("statistics section: type table, house records, the game's packet, and unknown chunks", () =>
 {
     var raw = Frames(w =>
     {
         Frame(w, 0, 0, 512); w.Write(1); w.Write(HouseSample(0, 10000, 0));
-        Frame(w, 60, 0, 512); w.Write(1); w.Write(HouseSample(0, 9000, 2500, army: 1800, harvested: 1200));
+        Frame(w, 30, 0, 1024); w.Write(3);
+        w.Write(MoneyInRecord(0, 0x10500000 + 0x44DCE, 1200));   // Ares harvester unload
+        w.Write(MoneyInRecord(0, 0x4CA04B, 300));                 // FactoryClass::Abandon refund
+        w.Write(MoneyInRecord(0, 0x12345678, 50));                // nobody's
+        Frame(w, 60, 0, 512); w.Write(1); w.Write(HouseSample(0, 9000, 2550, army: 1800));
         End(w);
     });
     var section = Chunks(("TYPE", TypeChunk()), ("ZZZZ", new byte[] { 1, 2, 3 }), ("HOUS", HouseChunk()),
-        ("GAME", GameChunk()), ("STAT", StatsPacket()));
+        ("GAME", GameChunk()), ("STAT", StatsPacket()),
+        ("MODS", ModulesChunk(("gamemd-spawn.exe", 0x400000, 0x793000, 0x3BDF544E), ("Ares.dll", 0x10500000, 0xDB000, 0x61DAA114))));
     var doc = Load(Fixture(raw, statistics: section));
     Check(doc.SawEndOfStream && doc.Warnings.Count == 0, "clean parse with an unknown chunk");
     Check(doc.Header.HasStatisticsSection, "header points at the section");
@@ -360,9 +433,8 @@ Run("statistics section: type table, house records, the game's packet, and unkno
     Sequence(new[] { 0, 2 }, house.Array(StatisticsArray.BuiltUnits), "built units array");
     Equal(2, house.Total(StatisticsArray.BuiltUnits), "built units total");
     Sequence(new[] { 0, 1 }, house.Array(StatisticsArray.LostUnits), "recorder's lost units array");
-    Equal(1500, house.IncomeFrom(IncomeSource.Harvested), "harvested income");
-    Equal(300, house.IncomeFrom(IncomeSource.Refunded), "refunded income");
-    Equal(1800, house.IncomeTotal, "income total");
+    Equal(2, stats.Modules.Count, "module table");
+    Equal("Ares.dll", stats.Modules[1].Name, "module name");
 
     var game = stats.Game!;
     Equal(60, game.EndFrame, "game end frame");
@@ -379,10 +451,26 @@ Run("statistics section: type table, house records, the game's packet, and unkno
 
     var analysis = StatisticsAnalysis.Build(doc);
     var t = analysis.Houses.Single();
-    Equal(1500.0, t.TotalIncome, "income is money on hand moved plus spent moved");
+    // Money on hand -1000, spent +2550, less the 300 refunded: 1250 net income.
+    Equal(1250.0, t.TotalIncome, "income is money on hand moved plus spent moved, less refunds");
+    Equal(2250.0, t.NetSpent, "spent less refunds");
     Equal(1800.0, t.PeakArmyValue, "peak army value");
     Check(analysis.HasHarvestData && analysis.HasIncomeSources, "harvest data present");
-    Equal(1200.0, t.Harvested[^1].Value, "harvested series from the recorder's counter");
+    Equal(1200L, t.IncomeFrom(IncomeSource.Harvested), "relocated Ares caller resolves through the module table");
+    Equal(300L, t.IncomeFrom(IncomeSource.Refunded), "game caller");
+    Equal(50L, t.IncomeFrom(IncomeSource.Unclassified), "unknown caller");
+    Equal(0.0, t.DirectIncome, "every credit accounted for by a payment");
+    Equal(1200.0, t.Harvested[^1].Value, "harvested series from the payments");
+    Equal(50L, analysis.Unclassified.Single().Amount, "unclassified caller listed");
+
+    // An overrides file puts a rule ahead of the built-in table.
+    var custom = new IncomeClassifier(IncomeClassifier.ParseRules(
+        """[ { "module": "?", "offset": "0x12345678", "source": "Bounty" } ]""").Concat(IncomeClassifier.BuiltIn));
+    Equal(50L, StatisticsAnalysis.Build(doc, custom).Houses.Single().IncomeFrom(IncomeSource.Bounty), "override rule");
+    // A rule pinned to another build of the module does not match.
+    var otherBuild = new IncomeClassifier(IncomeClassifier.ParseRules(
+        """[ { "module": "Ares.dll", "timestamp": "0x11111111", "offset": "0x44DCE", "source": "Crates" } ]"""));
+    Equal(IncomeSource.Unclassified, otherBuild.Classify(0x10544DCE, stats.Modules).Source, "build-pinned rule");
     Equal("Tester", t.Name, "timeline name from the roster");
 
     string csv = Path.GetTempFileName();
@@ -397,7 +485,7 @@ Run("statistics section: type table, house records, the game's packet, and unkno
         Equal(2, counts.GetProperty("BuiltUnits").GetProperty("MTNK").GetInt32(), "JSON counts keyed by type ID");
         Equal(1, counts.GetProperty("LostUnits").GetProperty("MTNK").GetInt32(), "JSON lost counts");
         var statistics = json.RootElement.GetProperty("statistics");
-        Equal(1500, statistics.GetProperty("houses")[0].GetProperty("income").GetProperty("Harvested").GetInt32(), "JSON income");
+        Equal(1200, statistics.GetProperty("timeline")[0].GetProperty("incomeBySource").GetProperty("Harvested").GetInt32(), "JSON income");
         Equal(42, statistics.GetProperty("game").GetProperty("OutOfSyncFrame").GetInt32(), "JSON game record");
     }
     finally { File.Delete(csv); }
@@ -593,13 +681,33 @@ static byte[] Chat()
     Encoding.Unicode.GetBytes("hello \u4e16\u754c").CopyTo(b, 73);
     return b;
 }
-// HouseStatsSample: 28 little-endian int32 fields - 20 house fields, 7 income sources, flags last.
-static byte[] HouseSample(int house, int credits, int spent, uint flags = 0, int army = 0, int harvested = 0)
+// HouseStatsSample: 21 little-endian int32 fields, flags last.
+static byte[] HouseSample(int house, int credits, int spent, uint flags = 0, int army = 0)
 {
-    var b = new byte[112];
+    var b = new byte[84];
     Put(b, 0, (uint)house); Put(b, 4, (uint)credits); Put(b, 12, (uint)spent);
-    Put(b, 44, (uint)army); Put(b, 80, (uint)harvested); Put(b, 108, flags);
+    Put(b, 44, (uint)army); Put(b, 80, flags);
     return b;
+}
+// MoneyInRecord: uint8 house, 3 reserved bytes, uint32 caller, int32 amount.
+static byte[] MoneyInRecord(int house, uint caller, int amount)
+{
+    var b = new byte[12];
+    b[0] = (byte)house; Put(b, 4, caller); Put(b, 8, (uint)amount);
+    return b;
+}
+static byte[] ModulesChunk(params (string Name, uint Base, uint Size, uint Stamp)[] modules)
+{
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    w.Write((uint)modules.Length);
+    foreach (var (name, moduleBase, size, stamp) in modules)
+    {
+        w.Write(moduleBase); w.Write(size); w.Write(stamp);
+        w.Write((ushort)name.Length); w.Write(Encoding.Unicode.GetBytes(name));
+    }
+    w.Flush();
+    return buffer.ToArray();
 }
 static byte[] GameChunk()
 {
@@ -635,9 +743,7 @@ static byte[] TypeChunk()
 }
 static byte[] HouseChunk()
 {
-    var record = new byte[310];
-    Put(record, 282, 1500);     // Income[Harvested]
-    Put(record, 282 + 12, 300); // Income[Refunded]
+    var record = new byte[282];
     Encoding.Unicode.GetBytes("Tester").CopyTo(record, 4);
     Encoding.ASCII.GetBytes("Americans").CopyTo(record, 46);
     Put(record, 70, 3); Put(record, 74, 1); Put(record, 78, 1); Put(record, 82, 2);

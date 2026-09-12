@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace YrrpAnalyser.App;
 
-/// <summary>Remembered between runs: recent files and where the rules INIs live.</summary>
+/// <summary>Remembered between runs: recent files, where the rules INIs live, and view choices.</summary>
 internal sealed class AppSettings
 {
     public List<string> RecentFiles { get; set; } = [];
@@ -10,6 +10,8 @@ internal sealed class AppSettings
     public string LastFolder { get; set; } = "";
     public bool ShowTimingEvents { get; set; }
     public bool ShowChatAndBeacons { get; set; } = true;
+    /// <summary>Titles of the Statistics charts the user has hidden.</summary>
+    public List<string> HiddenCharts { get; set; } = [];
 
     private static string Path0 => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

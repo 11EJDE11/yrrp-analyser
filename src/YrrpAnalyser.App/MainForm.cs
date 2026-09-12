@@ -287,7 +287,7 @@ internal sealed partial class MainForm : Form
 
     private static ListView MakeListView(params (string Header, int Width)[] columns)
     {
-        var view = new ListView
+        var view = new HeaderAwareListView
         {
             View = View.Details,
             FullRowSelect = true,
@@ -305,7 +305,7 @@ internal sealed partial class MainForm : Form
 
     private static Panel Scrollable(Control content)
     {
-        var host = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Background };
+        var host = new StableScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Background };
         content.Dock = DockStyle.Top;
         host.Controls.Add(content);
         return host;

@@ -82,8 +82,8 @@ public readonly record struct FrameObjectCensus(int AbstractCount, int ScenarioU
 public readonly record struct FrameRandomState(int Next1, int Next2);
 
 /// <summary>
-/// Where money reached a house, told apart by the call site that handed it to Refund_Money. Mirrors
-/// IncomeSource in ReplayFormat.h.
+/// What a payment into a house's balance was for. Decided here, from the caller the recorder wrote
+/// (see <see cref="IncomeClassifier"/>) - the replay itself records only the raw caller.
 /// </summary>
 public enum IncomeSource
 {
@@ -91,10 +91,22 @@ public enum IncomeSource
     Buildings,
     Sold,
     Refunded,
+    StartingCredits,
+    Grinding,
     Crates,
     Stolen,
+    Bounty,
+    Superweapon,
+    Warhead,
     Other,
+    Unclassified,
 }
+
+/// <summary>
+/// One MoneyInRecord: a payment through HouseClass::Refund_Money, summed per house and caller within
+/// its frame. Caller is the absolute return address; resolve it with the recording's module table.
+/// </summary>
+public readonly record struct MoneyIn(int House, uint Caller, int Amount);
 
 [Flags]
 public enum HouseStatsFlags : uint
@@ -135,27 +147,8 @@ public readonly record struct HouseStatsSample(
     int UnitsBuilt,
     int BuildingsBuilt,
     int Score,
-    int IncomeHarvested,
-    int IncomeBuildings,
-    int IncomeSold,
-    int IncomeRefunded,
-    int IncomeCrates,
-    int IncomeStolen,
-    int IncomeOther,
     HouseStatsFlags Flags)
 {
-    /// <summary>Cumulative income from one source, counted by the recorder at HouseClass::Refund_Money.</summary>
-    public int Income(IncomeSource source) => source switch
-    {
-        IncomeSource.Harvested => IncomeHarvested,
-        IncomeSource.Buildings => IncomeBuildings,
-        IncomeSource.Sold => IncomeSold,
-        IncomeSource.Refunded => IncomeRefunded,
-        IncomeSource.Crates => IncomeCrates,
-        IncomeSource.Stolen => IncomeStolen,
-        _ => IncomeOther,
-    };
-
     /// <summary>What the sidebar shows: cash plus the value of ore waiting in refineries and silos.</summary>
     public int CreditsOnHand => Credits + StoredOreValue;
 
@@ -180,6 +173,7 @@ public sealed class FrameRecord
     public int? GameSpeed;
     public uint[]? SelectionTriggerIds;
     public HouseStatsSample[]? HouseStats;
+    public MoneyIn[]? MoneyIn;
     public byte[]? Extension;
 
     /// <summary>Index of this frame's first event in <see cref="ReplayDocument.Events"/>.</summary>

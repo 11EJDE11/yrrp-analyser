@@ -183,7 +183,7 @@ internal sealed class CompareForm : Form
     {
         var tabs = new TabControl { Dock = DockStyle.Fill };
 
-        var crcView = new ListView
+        var crcView = new HeaderAwareListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,

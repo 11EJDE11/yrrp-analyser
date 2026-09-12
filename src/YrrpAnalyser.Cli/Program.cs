@@ -133,11 +133,18 @@ static int Report(string[] args)
             var summary = doc.Statistics?.ForHouse(t.HouseIndex);
             string result = (s.Flags & HouseStatsFlags.Winner) != 0 ? "won"
                 : t.DefeatedAtFrame is { } f ? $"defeated {doc.TimeLabel(f)}" : "";
-            Console.WriteLine($"  {t.Name,-22} {s.CreditsOnHand,11:N0} {t.TotalIncome,10:N0} {s.CreditsSpent,10:N0} " +
+            Console.WriteLine($"  {t.Name,-22} {s.CreditsOnHand,11:N0} {t.TotalIncome,10:N0} {t.NetSpent,10:N0} " +
                               $"{t.PeakArmyValue,10:N0}  {s.UnitsBuilt,5}/{s.UnitsKilled,5}/{s.UnitsLost,-5}   " +
                               $"{s.BuildingsBuilt,4}/{s.BuildingsKilled,4}/{s.BuildingsLost,-4} {s.Score,8:N0}  {result}" +
                               (summary is null ? "" : $"  {summary.Country}"));
+            if (t.IncomeBySource.Count > 0)
+                Console.WriteLine("      income: " + string.Join("  ", t.IncomeBySource.OrderBy(kv => kv.Key)
+                    .Select(kv => $"{kv.Key} {kv.Value:N0}")) +
+                    (Math.Abs(t.DirectIncome) >= 1 ? $"  Direct {t.DirectIncome:N0}" : ""));
         }
+        foreach (var u in statistics.Unclassified)
+            Console.WriteLine($"  unclassified caller {u.Caller} (build 0x{u.Caller.TimeDateStamp:X8}): " +
+                              $"{u.Amount:N0} in {u.Payments:N0} payments");
     }
 
     Console.WriteLine();
@@ -274,6 +281,7 @@ static int Export(string path, string outDir)
     Exporters.WriteFrameCrcCsv($"{stem}.frames.csv", doc);
     Exporters.WriteSummaryJson($"{stem}.summary.json", doc, network, activity);
     Exporters.WriteHouseStatsCsv($"{stem}.house-stats.csv", doc);
+    Exporters.WriteMoneyInCsv($"{stem}.money-in.csv", doc);
     File.WriteAllText($"{stem}.spawn.ini", doc.SpawnIniText);
     File.WriteAllText($"{stem}.spawnmap.ini", doc.SpawnMapText);
     if (doc.Statistics?.StatsPacketBytes is { } packet)
