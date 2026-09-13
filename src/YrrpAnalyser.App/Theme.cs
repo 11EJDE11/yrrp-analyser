@@ -42,6 +42,9 @@ internal static class Theme
     public static Color ForHouse(int houseIndex) =>
         houseIndex < 0 ? Muted : PlayerPalette[houseIndex % PlayerPalette.Length];
 
+    /// <summary>A team wears its first player's colour, so no two teams, and no team and outside player, share one.</summary>
+    public static Color ForTeam(Team team) => team.Members.Count > 0 ? ForHouse(team.Members[0]) : Muted;
+
     public static Color Blend(Color a, Color b, double t) => Color.FromArgb(
         (int)(a.R + (b.R - a.R) * t),
         (int)(a.G + (b.G - a.G) * t),

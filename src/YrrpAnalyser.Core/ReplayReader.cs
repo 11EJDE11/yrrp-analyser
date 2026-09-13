@@ -379,6 +379,25 @@ public static class ReplayReader
                     }
                 }
 
+                if ((flags & (uint)FrameRecordFlags.Objects) != 0)
+                {
+                    if (!reader.TryRead(ReplayFormat.ObjectsBlockHeaderSize, out var oh)) { doc.Truncated = true; break; }
+                    int appeared = BinaryPrimitives.ReadUInt16LittleEndian(oh);
+                    int updated = BinaryPrimitives.ReadUInt16LittleEndian(oh[2..]);
+                    int gone = BinaryPrimitives.ReadUInt16LittleEndian(oh[4..]);
+                    if (appeared > ReplayFormat.MaxObjectRecordsPerFrame || updated > ReplayFormat.MaxObjectRecordsPerFrame
+                        || gone > ReplayFormat.MaxObjectRecordsPerFrame || appeared + updated + gone == 0)
+                    {
+                        doc.Warnings.Add($"Frame {frameNumber} claims {appeared}/{updated}/{gone} object records, " +
+                                         $"outside 0..{ReplayFormat.MaxObjectRecordsPerFrame} each; stopped reading here.");
+                        break;
+                    }
+                    if (!reader.TryRead((appeared + updated + gone) * ReplayFormat.ObjectRecordSize, out var ob))
+                    { doc.Truncated = true; break; }
+                    record.Objects = ParseObjects(ob, appeared, updated, gone);
+                    doc.HasObjectSnapshots = true;
+                }
+
                 if ((flags & (uint)FrameRecordFlags.Extensions) != 0)
                 {
                     if (!reader.TryRead(4, out var eb)) { doc.Truncated = true; break; }
@@ -440,6 +459,41 @@ public static class ReplayReader
             f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10],
             f[11], f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19],
             (HouseStatsFlags)(uint)f[20]);
+    }
+
+    // ObjectAppearRecord, ObjectUpdateRecord and ObjectGoneRecord, 12 bytes each, in that order.
+    private static ObjectSnapshot ParseObjects(ReadOnlySpan<byte> r, int appeared, int updated, int gone)
+    {
+        const int size = ReplayFormat.ObjectRecordSize;
+        var appear = new ObjectAppear[appeared];
+        for (int i = 0; i < appeared; i++)
+        {
+            var a = r.Slice(i * size, size);
+            appear[i] = new ObjectAppear(BinaryPrimitives.ReadUInt32LittleEndian(a),
+                BinaryPrimitives.ReadUInt16LittleEndian(a[4..]), (ObjectKind)a[6], a[7], a[8], a[9]);
+        }
+
+        int offset = appeared * size;
+        var update = new ObjectUpdate[updated];
+        for (int i = 0; i < updated; i++)
+        {
+            var u = r.Slice(offset + i * size, size);
+            update[i] = new ObjectUpdate(BinaryPrimitives.ReadUInt32LittleEndian(u),
+                BinaryPrimitives.ReadUInt16LittleEndian(u[4..]), BinaryPrimitives.ReadUInt16LittleEndian(u[6..]),
+                u[8], u[9], (ObjectFlags)u[10], u[11]);
+        }
+
+        offset += updated * size;
+        var goneRecords = new ObjectGone[gone];
+        for (int i = 0; i < gone; i++)
+        {
+            var g = r.Slice(offset + i * size, size);
+            goneRecords[i] = new ObjectGone(BinaryPrimitives.ReadUInt32LittleEndian(g),
+                BinaryPrimitives.ReadUInt16LittleEndian(g[4..]), BinaryPrimitives.ReadUInt16LittleEndian(g[6..]),
+                (GoneReason)g[8], g[9]);
+        }
+
+        return new ObjectSnapshot { Appeared = appear, Updated = update, Gone = goneRecords };
     }
 
     private static SideChannelEvent ParseSideChannel(ReadOnlySpan<byte> r)

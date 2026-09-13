@@ -130,13 +130,15 @@ internal sealed partial class MainForm
     {
         _tabs.Padding = new Point(14, 6);
 
-        foreach (var flow in new[] { _overviewFlow, _networkFlow, _activityFlow, _statisticsFlow })
+        foreach (var flow in new[] { _overviewFlow, _networkFlow, _activityFlow, _statisticsFlow, _teamsFlow })
         {
             var captured = flow;
             captured.SizeChanged += (_, _) => FitWidths(captured);
         }
 
         _tabs.TabPages.Add(NewPage("Overview", Scrollable(_overviewFlow)));
+        _tabs.TabPages.Add(NewPage("Match", BuildMatchTab()));
+        _tabs.TabPages.Add(NewPage("Teams", Scrollable(_teamsFlow)));
         _tabs.TabPages.Add(NewPage("Statistics", BuildStatisticsPage()));
         _tabs.TabPages.Add(NewPage("Events", BuildEventsTab()));
         _tabs.TabPages.Add(NewPage("Network", Scrollable(_networkFlow)));

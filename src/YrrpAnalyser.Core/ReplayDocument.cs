@@ -60,6 +60,9 @@ public sealed class ReplayDocument
 
     public bool HasExtensionBlocks { get; set; }
 
+    /// <summary>The recorder wrote where every object was: the map can show real positions, not estimates.</summary>
+    public bool HasObjectSnapshots { get; set; }
+
     public List<string> Warnings { get; } = [];
 
     /// <summary>Speed the simulation ran at over time; one segment unless someone moved the slider.</summary>

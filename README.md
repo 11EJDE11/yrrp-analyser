@@ -23,6 +23,40 @@ reproduces.
 
 ![Overview](docs/overview.png)
 
+## Match
+
+The game on its own map, with a play/pause/seek bar. The map is drawn from the embedded
+spawnmap.ini: every cell coloured from the map's lobby preview, lifted to its height from
+`[IsoMapPack5]`, with cliff faces and the ore and gem fields from `[OverlayPack]`. On it: buildings,
+units (squares for vehicles, dots for infantry, triangles for aircraft), where each unit was ordered to
+over the last few seconds, trails, what was destroyed and where, beacons, superweapon strikes, start
+positions and roughly what the recording player was looking at. A heatmap can show where the
+fighting was, where the armies are, or where units were being sent. Wheel to zoom, drag to pan,
+double-click to fit; Space plays and pauses, the arrow keys step.
+
+Above the map, **likeliness to win** splits a bar between the teams at the current moment, with the
+whole game's history under it. It is the Replay Insights advantage index - army value, the last
+minute's income, base value and usable cash, relative to the other teams still playing - sharpened so
+its percentages match how often the favourite actually won across 20 recorded games. Hover a segment
+for what it is made of. It only ever looks backwards, so it never knows the result early.
+
+The seek bar shows how heavy the fighting was along the game and marks defeats, superweapons and the
+heaviest fights. The side panel is each team's scoreboard at the current moment - click a player to
+hide them on the map - and a feed of what happened, latest first; click an entry to jump there.
+
+Recordings from a spawner that writes object snapshots (the `Objects` frame block) show every object
+where the game had it, every 30 frames. Older recordings have no positions at all, so the map says so
+and estimates: a unit leaves its owner's start position towards each destination it was ordered to at
+a typical speed and fades when it has not been ordered for a while, and buildings stand where they were
+placed until their owner is defeated.
+
+## Teams
+
+Who played with whom - the lobby's alliances, falling back to those held at the end of the game - and
+each team's result, players, totals and a side-by-side table; how each team's income, spending, army,
+production and kills split between its players; units and buildings destroyed team against team; and
+team timelines for the win estimate, army, income, money, base, kills and losses.
+
 ## Events
 
 Every event, chat message and beacon on one timeline, with payloads decoded. Pick a player on the

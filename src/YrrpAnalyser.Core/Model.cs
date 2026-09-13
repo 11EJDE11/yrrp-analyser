@@ -156,6 +156,60 @@ public readonly record struct HouseStatsSample(
     public int ArmyCount => Units + Infantry + Aircraft;
 }
 
+/// <summary>What kind of object an ObjectAppearRecord describes, and so which type table its type indexes.</summary>
+public enum ObjectKind : byte { Unit = 0, Infantry = 1, Aircraft = 2, Building = 3 }
+
+[Flags]
+public enum ObjectFlags : byte
+{
+    None = 0,
+    Veteran = 1 << 0,
+    Elite = 1 << 1,
+    InAir = 1 << 2,
+    Cloaked = 1 << 3,
+}
+
+public enum GoneReason : byte
+{
+    /// <summary>Left the map without being destroyed: sold, deployed, entered a transport or building, grinded.</summary>
+    Removed = 0,
+    /// <summary>Destroyed: the engine recorded the kill.</summary>
+    Destroyed = 1,
+}
+
+/// <summary>An object came onto the map, or changed owner or type: ObjectAppearRecord.</summary>
+public readonly record struct ObjectAppear(uint Id, ushort TypeIndex, ObjectKind Kind, byte Owner,
+    byte FoundationWidth, byte FoundationHeight);
+
+/// <summary>
+/// Where an object is now, when it moved or its state changed since the previous snapshot:
+/// ObjectUpdateRecord. X and Y are sixteenths of a cell; Height is the coordinate's Z / 16.
+/// </summary>
+public readonly record struct ObjectUpdate(uint Id, ushort X, ushort Y, byte Health, byte Mission,
+    ObjectFlags Flags, byte Height)
+{
+    public double CellX => X / (double)ReplayFormat.ObjectPositionUnitsPerCell;
+    public double CellY => Y / (double)ReplayFormat.ObjectPositionUnitsPerCell;
+    /// <summary>Health as a fraction, 0 to 1.</summary>
+    public double HealthRatio => Health / 255.0;
+}
+
+/// <summary>An object left the map: ObjectGoneRecord. KillerHouse is 0xFF when nobody is credited.</summary>
+public readonly record struct ObjectGone(uint Id, ushort X, ushort Y, GoneReason Reason, byte KillerHouse)
+{
+    public double CellX => X / (double)ReplayFormat.ObjectPositionUnitsPerCell;
+    public double CellY => Y / (double)ReplayFormat.ObjectPositionUnitsPerCell;
+    public int? Killer => KillerHouse == 0xFF ? null : KillerHouse;
+}
+
+/// <summary>One frame's Objects block: what changed on the map since the previous snapshot.</summary>
+public sealed class ObjectSnapshot
+{
+    public ObjectAppear[] Appeared { get; init; } = [];
+    public ObjectUpdate[] Updated { get; init; } = [];
+    public ObjectGone[] Gone { get; init; } = [];
+}
+
 /// <summary>
 /// One frame's record. Blocks are present only when the matching flag is set; the writer omits
 /// a block whose value has not changed since the last written frame.
@@ -174,6 +228,7 @@ public sealed class FrameRecord
     public uint[]? SelectionTriggerIds;
     public HouseStatsSample[]? HouseStats;
     public MoneyIn[]? MoneyIn;
+    public ObjectSnapshot? Objects;
     public byte[]? Extension;
 
     /// <summary>Index of this frame's first event in <see cref="ReplayDocument.Events"/>.</summary>

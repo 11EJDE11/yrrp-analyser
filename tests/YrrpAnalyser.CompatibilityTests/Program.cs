@@ -3,13 +3,14 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using YrrpAnalyser;
+using YrrpAnalyser.Map;
 
 // These fixtures deliberately use numeric wire offsets and flags from the C++ format, never
 // ReplayFormat constants: changing the parser's layout must not silently change its test input.
 int passed = 0, failed = 0;
-Run("all 2048 frame flag combinations preserve block and event alignment", () =>
+Run("all 4096 frame flag combinations preserve block and event alignment", () =>
 {
-    for (uint flags = 0; flags < 2048; flags++)
+    for (uint flags = 0; flags < 4096; flags++)
     {
         var doc = Load(Fixture(Frames(w =>
         {
@@ -24,6 +25,8 @@ Run("all 2048 frame flag combinations preserve block and event alignment", () =>
             if ((flags & 256) != 0) { w.Write(2); w.Write(90u); w.Write(0xF1234567u); }
             if ((flags & 512) != 0) { w.Write(2); w.Write(HouseSample(0, 5000, 100)); w.Write(HouseSample(1, 7000, 0, flags: 1)); }
             if ((flags & 1024) != 0) { w.Write(2); w.Write(MoneyInRecord(0, 0x4CA04B, 300)); w.Write(MoneyInRecord(3, 0x10544DCE, 1200)); }
+            if ((flags & 2048) != 0) w.Write(ObjectsBlock(
+                [Appear(77, 5, 3, 2, 3, 2)], [Update(77, 1608, 800, 200, 5, 1, 3)], [Gone(90, 16, 32, 1, 1)]));
             if ((flags & 16) != 0) { w.Write(3u); w.Write(new byte[] { 0xED, 0xAB, 0xCD }); }
             w.Write(Event(0x04, 3, 64, 0x12345678));
             w.Write(Event(0x1B, -1, 65, 0x87654321));
@@ -67,6 +70,15 @@ Run("all 2048 frame flag combinations preserve block and event alignment", () =>
         if ((flags & 1024) != 0)
             Sequence(new[] { new MoneyIn(0, 0x4CA04B, 300), new MoneyIn(3, 0x10544DCE, 1200) }, f.MoneyIn, "payments");
         else Check(f.MoneyIn is null, "absent payments");
+        if ((flags & 2048) != 0)
+        {
+            var o = f.Objects!;
+            Equal(new ObjectAppear(77, 5, ObjectKind.Building, 2, 3, 2), o.Appeared.Single(), "object appear");
+            Equal(new ObjectUpdate(77, 1608, 800, 200, 5, ObjectFlags.Veteran, 3), o.Updated.Single(), "object update");
+            Equal(new ObjectGone(90, 16, 32, GoneReason.Destroyed, 1), o.Gone.Single(), "object gone");
+            Check(doc.HasObjectSnapshots, "object snapshot presence");
+        }
+        else Check(f.Objects is null, "absent objects");
         Sequence((flags & 16) != 0 ? new byte[] { 0xED, 0xAB, 0xCD } : null, f.Extension, "extension");
         Equal((flags & 16) != 0, doc.HasExtensionBlocks, "extension presence");
         var events = doc.EnumerateEvents().ToArray();
@@ -622,6 +634,161 @@ Run("large FRAMEINFO gaps report nominal game time across speed changes, without
     finally { File.Delete(path); }
 });
 
+Run("object blocks reject an empty or oversized header", () =>
+{
+    foreach (var (appear, update, gone) in new[] { (0, 0, 0), (16385, 0, 0) })
+    {
+        var doc = Load(Fixture(Frames(w =>
+        {
+            Frame(w, 30, 0, 2048);
+            w.Write((ushort)appear); w.Write((ushort)update); w.Write((ushort)gone); w.Write((ushort)0);
+            End(w);
+        })));
+        Check(doc.Warnings.Any(x => x.Contains("object records")), $"{appear}/{update}/{gone} rejected");
+        Equal(0, doc.Frames.Count, "no frame kept");
+    }
+});
+
+Run("map codecs decode LZO1X and LCW blocks", () =>
+{
+    // 4 literals, then a 4-byte match 4 back (M2 0x6C, 0x00), then the end marker.
+    byte[] lzo = [21, (byte)'a', (byte)'b', (byte)'c', (byte)'d', 0x6C, 0x00, 0x11, 0x00, 0x00];
+    var output = new byte[8];
+    Equal(8, MapCompression.Lzo1xDecompress(lzo, output), "LZO length");
+    Equal("abcdabcd", Encoding.ASCII.GetString(output), "LZO bytes");
+    Equal(-1, MapCompression.Lzo1xDecompress(lzo, new byte[5]), "LZO output overrun refused");
+
+    // 3 literals, copy 3 from 3 back, fill 2 'z', copy 3 from absolute 0, end.
+    byte[] lcw = [0x83, (byte)'a', (byte)'b', (byte)'c', 0x00, 0x03, 0xFE, 0x02, 0x00, (byte)'z', 0xC0, 0x00, 0x00, 0x80];
+    output = new byte[11];
+    Equal(11, MapCompression.LcwDecompress(lcw, output), "LCW length");
+    Equal("abcabczzabc", Encoding.ASCII.GetString(output), "LCW bytes");
+    Equal(-1, MapCompression.LcwDecompress([0x00, 0x09], new byte[4]), "LCW copy before the start refused");
+
+    var packed = Convert.ToBase64String([(byte)lzo.Length, 0, 8, 0, .. lzo]);
+    Equal("abcdabcd", Encoding.ASCII.GetString(MapCompression.DecodePack(packed, MapCompression.Codec.Lzo)!), "block framing");
+    Check(MapCompression.DecodePack("not base64!", MapCompression.Codec.Lzo) is null, "bad base64");
+});
+
+Run("map tiles, waypoints and projection", () =>
+{
+    // Two IsoMapPack5 tiles as literal LZO: (3,4) at level 2 and (5,6) at level 0.
+    var tiles = new byte[22];
+    BinaryPrimitives.WriteInt16LittleEndian(tiles.AsSpan(0), 3); BinaryPrimitives.WriteInt16LittleEndian(tiles.AsSpan(2), 4); tiles[9] = 2;
+    BinaryPrimitives.WriteInt16LittleEndian(tiles.AsSpan(11), 5); BinaryPrimitives.WriteInt16LittleEndian(tiles.AsSpan(13), 6);
+    byte[] block = [(byte)(17 + tiles.Length), .. tiles, 0x11, 0x00, 0x00];
+    string iso = Convert.ToBase64String([(byte)block.Length, 0, (byte)tiles.Length, 0, .. block]);
+    var map = MapInfo.Parse(IniDocument.Parse(
+        "[Map]\nSize=0,0,50,40\nLocalSize=2,3,46,35\nTheater=SNOW\n" +
+        "[Waypoints]\n0=12034\n1=40045\n98=1001\n" +
+        $"[IsoMapPack5]\n1={iso}\n" +
+        "[Structures]\n0=Neutral,CAOILD,256,30,31,0,None,1,0,0,0,0\n"));
+    Equal(2, map.TileCount, "tiles");
+    Equal(2, map.LevelAt(3, 4), "tile level");
+    Check(map.HasTile(5, 6) && !map.HasTile(6, 6), "tile presence");
+    Equal(new CellRef(34, 12), map.StartLocation(0), "start 0 is Y*1000+X");
+    Equal(2, map.StartLocations.Count(), "only waypoints 0-7 are starts");
+    Equal(new MapStructure("Neutral", "CAOILD", 30, 31), map.Structures.Single(), "structure");
+
+    var (px, py) = map.ToPixel(20.25, 17.5, 0);
+    var (x, y) = map.FromPixel(px, py);
+    Check(Math.Abs(x - 20.25) < 1e-9 && Math.Abs(y - 17.5) < 1e-9, "projection round trip");
+    var (_, lifted) = map.ToPixel(20.25, 17.5, 2);
+    Equal(py - 30, lifted, "two levels lift 30 pixels");
+    // The client's GetIsoTilePixelCoord for tile (x, y): ((x - y + W - 1) * 30 - L.x * 60, (x + y - W - 1) * 15 - L.y * 30).
+    Equal(((34 - 12 + 49) * 30.0 - 120, (34 + 12 - 51) * 15.0 - 90), map.ToPixel(34, 12, 0), "matches the client");
+});
+
+Run("teams come from lobby alliances and the last team standing wins", () =>
+{
+    string ini = "[Settings]\nName=A\nColor=0\nSide=0\n[Other1]\nName=B\nColor=1\n[Other2]\nName=C\nColor=2\n[Other3]\nName=D\nColor=3\n" +
+                 "[Multi1_Alliances]\nHouseAllyOne=1\n[Multi2_Alliances]\nHouseAllyOne=0\n" +
+                 "[Multi3_Alliances]\nHouseAllyOne=3\n[Multi4_Alliances]\nHouseAllyOne=2\n";
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 60, 0, 512);
+        w.Write(4);
+        for (int h = 0; h < 4; h++) w.Write(HouseSample(h, 5000, 0, army: h < 2 ? 3000 : 1000));
+        Frame(w, 120, 0, 512);
+        w.Write(4);
+        for (int h = 0; h < 4; h++) w.Write(HouseSample(h, 5000, 0, flags: h < 2 ? 0u : 1u, army: h < 2 ? 3000 : 0));
+        End(w);
+    }), ini: ini));
+    var stats = StatisticsAnalysis.Build(doc);
+    var teams = TeamAnalysis.Build(doc, stats);
+    Equal(2, teams.Teams.Count, "two teams");
+    Sequence(new[] { 0, 1 }, teams.Teams[0].Members.ToArray(), "team 1");
+    Sequence(new[] { 2, 3 }, teams.Teams[1].Members.ToArray(), "team 2");
+    Equal(TeamResult.Won, teams.Teams[0].Result, "standing team won");
+    Equal(TeamResult.Lost, teams.Teams[1].Result, "eliminated team lost");
+    Equal(120, teams.Teams[1].EliminatedAtFrame, "elimination frame");
+    Equal(6000.0, teams.Teams[0].PeakArmyValue, "team army summed");
+
+    var win = WinLikelihood.Build(doc, stats, teams);
+    Equal(2, win.Samples.Count, "a sample per statistics frame");
+    Sequence(new[] { 0.5, 0.5 }, win.Samples[0].Shares, "even in the opening");
+    Sequence(new[] { 1.0, 0.0 }, win.Samples[1].Shares, "eliminated team drops to nothing");
+});
+
+Run("the win model tempers, smooths and never divides by zero", () =>
+{
+    var (even, _) = WinLikelihood.Evaluate([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], [true, true, true], null, 1, 600);
+    Check(even.All(s => Math.Abs(s - 1 / 3.0) < 1e-12), "zero inputs are even");
+    var (target, _) = WinLikelihood.Evaluate([[3000, 0, 0, 0], [1000, 0, 0, 0]], [true, true], null, 1, 600);
+    Check(target[0] > 0.5 && target[0] < 1, "bigger army leads, tempered");
+    var (step, _) = WinLikelihood.Evaluate([[3000, 0, 0, 0], [1000, 0, 0, 0]], [true, true], [0.5, 0.5], 1, 600);
+    Check(step[0] > 0.5 && step[0] < target[0], "smoothed towards the target");
+    var sharpened = WinLikelihood.Sharpen([0.6, 0.4]);
+    Check(sharpened[0] > 0.6 && Math.Abs(sharpened.Sum() - 1) < 1e-12, "sharpened keeps the leader and sums to one");
+});
+
+Run("recorded objects ease between snapshots and report their deaths", () =>
+{
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 30, 0, 2048);
+        w.Write(ObjectsBlock([Appear(5, 2, 0, 0, 1, 1), Appear(6, 7, 3, 1, 3, 2)],
+            [Update(5, 160, 160, 255, 2, 0, 0), Update(6, 320, 320, 255, 5, 0, 0)], []));
+        Frame(w, 60, 0, 2048);
+        w.Write(ObjectsBlock([], [Update(5, 192, 160, 200, 2, 0, 0)], []));
+        Frame(w, 90, 0, 2048);
+        w.Write(ObjectsBlock([], [], [Gone(5, 192, 160, 1, 1)]));
+        Frame(w, 600, 0, 8); w.Write(1u);
+        End(w);
+    })));
+    var match = MatchAnalysis.Build(doc, StatisticsAnalysis.Build(doc), TypeNameResolver.Empty);
+    Check(match.HasRecordedPositions, "recorded");
+    var unit = match.StatesAt(45).Single(s => s.Id == 5);
+    Check(Math.Abs(unit.X - 11) < 1e-6 && Math.Abs(unit.Y - 10) < 1e-6, $"halfway between snapshots, got ({unit.X},{unit.Y})");
+    Check(unit.Moving, "moving");
+    Check(match.StatesAt(90).All(s => s.Id != 5), "gone once destroyed");
+    var building = match.StatesAt(500).Single(s => s.Id == 6);
+    Equal((3, 2), (building.FoundationWidth, building.FoundationHeight), "foundation");
+    Equal(ObjectKind.Building, building.Kind, "kind");
+    var death = match.Deaths.Single();
+    Equal((5u, 0, 1), (death.Id, death.Owner, death.Killer!.Value), "death credited");
+});
+
+Run("without snapshots, units are estimated from their orders", () =>
+{
+    string ini = "[Settings]\nName=A\nColor=0\n[SpawnLocations]\nMulti1=0\n";
+    string map = "[Map]\nSize=0,0,50,40\nLocalSize=0,0,50,40\n[Waypoints]\n0=10010\n";
+    var doc = Load(Fixture(Frames(w =>
+    {
+        Frame(w, 60, 1, 0);
+        w.Write(MegaMission(0, 4242, 2, 30, 10));
+        End(w);
+    }), ini: ini, map: map));
+    var match = MatchAnalysis.Build(doc, StatisticsAnalysis.Build(doc), TypeNameResolver.Empty);
+    Check(!match.HasRecordedPositions, "estimated");
+    var start = match.StatesAt(60).Single();
+    Check(start.Estimated && Math.Abs(start.X - 10.5) < 1e-6, $"leaves from the start position, got {start.X}");
+    var later = match.StatesAt(60 + 60 * 60).Single();
+    Check(Math.Abs(later.X - 30.5) < 1e-6 && !later.Moving, "arrives at the ordered cell");
+    Check(!match.StatesAt(60 + 60 * 400).Any(), "fades out when not ordered again");
+    Equal(1, match.Orders.Count, "order kept");
+});
+
 Console.WriteLine($"{passed} passed, {failed} failed");
 return failed == 0 ? 0 : 1;
 
@@ -694,6 +861,50 @@ static byte[] MoneyInRecord(int house, uint caller, int amount)
 {
     var b = new byte[12];
     b[0] = (byte)house; Put(b, 4, caller); Put(b, 8, (uint)amount);
+    return b;
+}
+// Objects block: uint16 appear/update/gone counts and a reserved uint16, then 12-byte records of each.
+static byte[] ObjectsBlock(byte[][] appear, byte[][] update, byte[][] gone)
+{
+    using var buffer = new MemoryStream();
+    using var w = new BinaryWriter(buffer);
+    w.Write((ushort)appear.Length); w.Write((ushort)update.Length); w.Write((ushort)gone.Length); w.Write((ushort)0);
+    foreach (var r in appear.Concat(update).Concat(gone)) w.Write(r);
+    w.Flush();
+    return buffer.ToArray();
+}
+// ObjectAppearRecord: uint32 id, uint16 type, uint8 kind, uint8 owner, uint8 width, uint8 height, uint16 reserved.
+static byte[] Appear(uint id, ushort type, byte kind, byte owner, byte width, byte height)
+{
+    var b = new byte[12];
+    Put(b, 0, id); BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), type);
+    b[6] = kind; b[7] = owner; b[8] = width; b[9] = height;
+    return b;
+}
+// ObjectUpdateRecord: uint32 id, uint16 x, uint16 y (sixteenths of a cell), health, mission, flags, height.
+static byte[] Update(uint id, ushort x, ushort y, byte health, byte mission, byte flags, byte height)
+{
+    var b = new byte[12];
+    Put(b, 0, id); BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), x); BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(6), y);
+    b[8] = health; b[9] = mission; b[10] = flags; b[11] = height;
+    return b;
+}
+// ObjectGoneRecord: uint32 id, uint16 x, uint16 y, uint8 reason, uint8 killer house, uint16 reserved.
+static byte[] Gone(uint id, ushort x, ushort y, byte reason, byte killer)
+{
+    var b = new byte[12];
+    Put(b, 0, id); BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), x); BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(6), y);
+    b[8] = reason; b[9] = killer;
+    return b;
+}
+// A MEGAMISSION: Whom (object) at payload 0, mission at 5, destination cell TargetClass at 12.
+static byte[] MegaMission(sbyte house, int whom, byte mission, int cellX, int cellY)
+{
+    var b = new byte[111];
+    b[0] = 0x04; b[2] = unchecked((byte)house);
+    Put(b, 7, (uint)whom); b[7 + 4] = 52;
+    b[7 + 5] = mission;
+    Put(b, 7 + 12, (uint)(cellX + 1000 * cellY)); b[7 + 16] = 11;
     return b;
 }
 static byte[] ModulesChunk(params (string Name, uint Base, uint Size, uint Stamp)[] modules)

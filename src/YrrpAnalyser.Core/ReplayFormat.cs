@@ -47,6 +47,14 @@ public static class ReplayFormat
     public const int MoneyInRecordSize = 12;               // sizeof(MoneyInRecord)
     public const int MaxMoneyInPerFrame = 1024;
 
+    // Objects: where everything on the map is, every ObjectSnapshotIntervalFrames, as changes.
+    public const int ObjectsBlockHeaderSize = 8;           // sizeof(ObjectsBlockHeader)
+    public const int ObjectRecordSize = 12;                // sizeof(ObjectAppearRecord/UpdateRecord/GoneRecord)
+    public const int MaxObjectRecordsPerFrame = 16384;
+    public const int ObjectSnapshotIntervalFrames = 30;
+    /// <summary>Object positions are stored in sixteenths of a cell: leptons / 16.</summary>
+    public const int ObjectPositionUnitsPerCell = 16;
+
     /// <summary>A four-character chunk tag as MakeChunkTag packs it: first character in the low byte.</summary>
     public static uint ChunkTag(string tag) =>
         (uint)(tag[0] | tag[1] << 8 | tag[2] << 16 | tag[3] << 24);
@@ -136,8 +144,14 @@ public enum FrameRecordFlags : uint
     /// <summary>A positive int32 count followed by that many 12-byte MoneyInRecord payments.</summary>
     MoneyIn = 1u << 10,
 
+    /// <summary>
+    /// An 8-byte header of three uint16 counts, then that many 12-byte object appear, update and gone
+    /// records: what changed on the map since the previous snapshot.
+    /// </summary>
+    Objects = 1u << 11,
+
     Known = TacticalPos | Selection | SideChannel | GameCrc | Extensions
-            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers | HouseStats | MoneyIn,
+            | ObjectCensus | GameSpeed | RandomState | SelectionTriggers | HouseStats | MoneyIn | Objects,
 }
 
 public enum SideChannelEventType : byte
