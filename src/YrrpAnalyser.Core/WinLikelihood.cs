@@ -41,24 +41,27 @@ public sealed class WinLikelihood
     public bool HasData => Samples.Count > 0 && Teams.Count > 1;
 
     /// <summary>The last sample at or before a frame.</summary>
-    public WinSample? At(int frame)
+    public WinSample? At(int frame) => IndexAt(frame) is >= 0 and var i ? Samples[i] : null;
+
+    private int IndexAt(int frame)
     {
-        if (Samples.Count == 0 || frame < Samples[0].Frame) return Samples.FirstOrDefault();
+        if (Samples.Count == 0) return -1;
+        if (frame < Samples[0].Frame) return 0;
         int lo = 0, hi = Samples.Count - 1;
         while (lo < hi)
         {
             int mid = (lo + hi + 1) / 2;
             if (Samples[mid].Frame <= frame) lo = mid; else hi = mid - 1;
         }
-        return Samples[lo];
+        return lo;
     }
 
     /// <summary>Shares at a frame, eased between the samples either side so playback moves smoothly.</summary>
     public double[] SharesAt(int frame)
     {
-        var before = At(frame);
-        if (before is null) return [];
-        int i = Samples.IndexOf(before);
+        int i = IndexAt(frame);
+        if (i < 0) return [];
+        var before = Samples[i];
         if (i + 1 >= Samples.Count || frame <= before.Frame) return before.Shares;
         var after = Samples[i + 1];
         double t = (frame - before.Frame) / (double)Math.Max(1, after.Frame - before.Frame);

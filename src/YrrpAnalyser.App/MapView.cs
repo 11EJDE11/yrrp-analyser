@@ -72,6 +72,8 @@ internal sealed class MapView : Control
         _heat?.Dispose();
         _heat = null;
         _heatKey = (-1, HeatLayer.None, 0, 0);
+        _background?.Dispose();
+        _background = null;
         if (_map is { IsUsable: true } map)
         {
             _terrainScale = TerrainRenderer.ScaleFor(map);
@@ -149,16 +151,7 @@ internal sealed class MapView : Control
         if (!_fitted) FitToView();
 
         var mapRect = new RectangleF(_offset.X, _offset.Y, (float)(_map.PixelWidth * _zoom), (float)(_map.PixelHeight * _zoom));
-        if (_terrain is not null)
-        {
-            g.InterpolationMode = _zoom / _terrainScale > 2.5 ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBilinear;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(_terrain, mapRect);
-            g.PixelOffsetMode = PixelOffsetMode.Default;
-        }
-        // Dimmed a little so what is on it reads first.
-        using (var dim = new SolidBrush(Color.FromArgb(Heat == HeatLayer.None ? 60 : 110, 10, 12, 16)))
-            g.FillRectangle(dim, mapRect);
+        g.DrawImageUnscaled(Background(mapRect), 0, 0);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         _states = _match.StatesAt(Frame).Where(s => !HiddenHouses.Contains(s.Owner)).ToList();
@@ -174,6 +167,40 @@ internal sealed class MapView : Control
         if (ShowCamera) DrawCamera(g);
         DrawHover(g);
         DrawBanner(g);
+    }
+
+    private Bitmap? _background;
+    private (double Zoom, PointF Offset, Size Size, bool Dark) _backgroundKey;
+
+    /// <summary>
+    /// The terrain at the current zoom and position, dimmed, as one control-sized bitmap. Scaling the
+    /// terrain is most of a frame's drawing, and it only changes when the view does - so moving through
+    /// the game, which changes everything else, is a straight copy of this.
+    /// </summary>
+    private Bitmap Background(RectangleF mapRect)
+    {
+        var key = (_zoom, _offset, ClientSize, Heat != HeatLayer.None);
+        if (_background is not null && key == _backgroundKey) return _background;
+
+        if (_background is null || _background.Size != ClientSize)
+        {
+            _background?.Dispose();
+            _background = new Bitmap(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height),
+                PixelFormat.Format32bppPArgb);
+        }
+        using var g = Graphics.FromImage(_background);
+        g.Clear(BackColor);
+        if (_terrain is not null)
+        {
+            g.InterpolationMode = _zoom / _terrainScale > 2.5 ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBilinear;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(_terrain, mapRect);
+        }
+        // Dimmed a little so what is on it reads first.
+        using (var dim = new SolidBrush(Color.FromArgb(Heat == HeatLayer.None ? 60 : 110, 10, 12, 16)))
+            g.FillRectangle(dim, mapRect);
+        _backgroundKey = key;
+        return _background;
     }
 
     // --- layers -------------------------------------------------------------------------------
@@ -669,6 +696,7 @@ internal sealed class MapView : Control
         {
             _terrain?.Dispose();
             _heat?.Dispose();
+            _background?.Dispose();
             _tip.Dispose();
         }
         base.Dispose(disposing);

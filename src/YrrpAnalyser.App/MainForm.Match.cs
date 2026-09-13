@@ -56,8 +56,8 @@ internal sealed partial class MainForm
         transport.Controls.AddRange([_playButton, back, forward, new Label { Text = "Speed", AutoSize = true, ForeColor = Theme.Muted, Margin = new Padding(0, 10, 4, 0) },
             _speedBox, _clock, _positionsNote]);
 
-        _scrubber.SeekRequested += frame => { Pause(); SetMatchFrame(frame); };
-        _winBar.SeekRequested += frame => { Pause(); SetMatchFrame(frame); };
+        _scrubber.SeekRequested += SeekWhileDragging;
+        _winBar.SeekRequested += SeekWhileDragging;
         _playTimer.Tick += (_, _) => PlaybackTick();
 
         var split = new SplitContainer
@@ -279,6 +279,26 @@ internal sealed partial class MainForm
         if (e.X is { } x && e.Y is { } y) _mapView.CentreOn(x, y);
         // Keep the clicked row where it is: moving to its frame shrinks the list to end at it.
         SetMatchFrame(e.Frame);
+    }
+
+    private long _lastDragPaint;
+
+    /// <summary>
+    /// A drag sends a stream of mouse moves, and Windows paints only once the queue is empty, so a
+    /// steady drag would not redraw until the pointer rested. So every ~30 ms the moved-to frame is
+    /// painted straight away, and the moves in between only record where the drag has got to.
+    /// </summary>
+    private void SeekWhileDragging(int frame)
+    {
+        Pause();
+        SetMatchFrame(frame);
+        if (Environment.TickCount64 - _lastDragPaint < 30) return;
+        _scrubber.Update();
+        _winBar.Update();
+        _clock.Update();
+        _mapView.Update();
+        _teamStatus.Update();
+        _lastDragPaint = Environment.TickCount64;
     }
 
     private void TogglePlay()
