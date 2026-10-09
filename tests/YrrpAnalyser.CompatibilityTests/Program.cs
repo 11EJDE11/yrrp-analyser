@@ -788,6 +788,59 @@ Run("without snapshots, units are estimated from their orders", () =>
     Check(!match.StatesAt(60 + 60 * 400).Any(), "fades out when not ordered again");
     Equal(1, match.Orders.Count, "order kept");
 });
+Run("the size breakdown accounts for every byte of the file and of the stream", () =>
+{
+    var raw = Frames(w =>
+    {
+        Frame(w, 30, 2, 1 | 2 | 8 | 512 | 2048);
+        w.Write(-20); w.Write(800);
+        w.Write(2); w.Write(101u); w.Write(102u);
+        w.Write(0xA1B2C3D4u);
+        w.Write(1); w.Write(HouseSample(0, 5000, 100));
+        w.Write(ObjectsBlock([Appear(77, 5, 3, 2, 3, 2)], [Update(77, 1608, 800, 200, 5, 1, 3)], []));
+        w.Write(MegaMission(1, 77, 5, 10, 20));
+        w.Write(Event(0x0E, 1, 31, 0));
+        Frame(w, 60, 1, 8);
+        w.Write(0xCAFEBABEu);
+        w.Write(MegaMission(1, 77, 5, 11, 20));
+        End(w);
+    });
+    var bytes = Fixture(raw, archive: Archive((30, Payload(5000, 300), null)),
+        statistics: Chunks(("GAME", GameChunk()), ("MODS", ModulesChunk(("gamemd.exe", 0x400000, 0x100000, 1)))));
+
+    string path = Path.GetTempFileName();
+    try
+    {
+        File.WriteAllBytes(path, bytes);
+        var doc = ReplayReader.Load(path);
+        var size = SizeBreakdown.Measure(doc);
+
+        Equal((long)bytes.Length, size.FileSize, "file size");
+        Equal((long)bytes.Length, size.Sections.Sum(s => s.StoredBytes), "sections add up to the file");
+        Check(size.Sections.All(s => s.Name != "Unaccounted"), "nothing unaccounted");
+
+        var stream = size.Sections.Single(s => s.Name == "Frame stream");
+        Equal((long)raw.Length, stream.RawBytes, "stream parts add up to the inflated stream");
+        Equal(doc.CompressedStreamBytes, stream.StoredBytes, "stream on disk");
+        Equal(stream.StoredBytes, stream.Children.Sum(c => c.StoredBytes), "stream shares add up");
+        Equal(3L * 111, stream.Children.Where(c => c.Name.StartsWith("Events")).Sum(c => c.RawBytes), "event bytes");
+        Equal(2L, stream.Children.Single(c => c.Name.StartsWith("Events: player")).Children
+            .Single(c => c.Name == "MegaMission").Count, "events split by type");
+        Equal(3L * 12, stream.Children.Single(c => c.Name == "Frame record headers").RawBytes, "two headers and the end marker");
+        Equal(2L * 12 + 8, stream.Children.Single(c => c.Name == "Object snapshots").RawBytes, "object block");
+
+        var saves = size.Sections.Single(s => s.Name.StartsWith("Embedded saves"));
+        Equal((long)doc.Header.CheckpointArchiveSize, saves.StoredBytes, "archive on disk");
+        var save = saves.Children.First();
+        Equal((long)doc.Checkpoints[0].CompressedSize, save.Children.Sum(c => c.StoredBytes), "save and sidecar shares");
+        Equal((long)doc.Checkpoints[0].RawSize, save.Children.Sum(c => c.RawBytes), "save and sidecar raw");
+
+        var statistics = size.Sections.Single(s => s.Name == "Statistics section");
+        Equal(2, statistics.Children.Count, "one entry per chunk");
+        Equal(statistics.StoredBytes, statistics.Children.Sum(c => c.StoredBytes), "chunks add up");
+    }
+    finally { File.Delete(path); }
+});
 
 Console.WriteLine($"{passed} passed, {failed} failed");
 return failed == 0 ? 0 : 1;

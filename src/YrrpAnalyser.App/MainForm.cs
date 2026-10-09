@@ -175,6 +175,7 @@ internal sealed partial class MainForm : Form
         {
             var doc = ReplayReader.Load(path);
             _doc = doc;
+            ResetSize();
             _settings.AddRecent(path);
             _settings.Save();
             RefreshRecentMenu();

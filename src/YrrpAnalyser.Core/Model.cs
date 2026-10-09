@@ -165,7 +165,7 @@ public enum ObjectFlags : byte
     None = 0,
     Veteran = 1 << 0,
     Elite = 1 << 1,
-    InAir = 1 << 2,
+    // Bit 2 is unused: the recorder no longer writes "in the air"; Height carries the altitude.
     Cloaked = 1 << 3,
 }
 

@@ -14,6 +14,7 @@ if (args.Length == 0)
           yrrp --scan <folder>                   one line per replay in a folder
           yrrp --export <replay.yrrp> <outdir>   write every CSV/JSON export
           yrrp --saves <replay.yrrp> [outdir]    list the embedded saves, or write them out as .SAV
+          yrrp --size <replay.yrrp>              where the file's bytes go
         """);
     return 0;
 }
@@ -26,6 +27,7 @@ try
         case "--scan" when args.Length >= 2: return Scan(args[1]);
         case "--export" when args.Length >= 3: return Export(args[1], args[2]);
         case "--saves" when args.Length >= 2: return Saves(args[1], args.Length >= 3 ? args[2] : null);
+        case "--size" when args.Length >= 2: return Size(args[1]);
         default: return Report(args);
     }
 }
@@ -310,5 +312,31 @@ static int Saves(string path, string? outDir)
         written++;
     }
     Console.WriteLine($"Wrote {written} save(s) to {outDir}");
+    return 0;
+}
+
+static int Size(string path)
+{
+    var doc = ReplayReader.Load(path);
+    var size = SizeBreakdown.Measure(doc);
+
+    Console.WriteLine($"{doc.FileName}: {size.FileSize:N0} bytes, {ReplayDocument.FormatTime(doc.Duration)} of game" +
+                      (size.GameMinutes > 0 ? $", {size.FileSize / size.GameMinutes / 1024:N0} KB per game minute" : ""));
+    Console.WriteLine("On disk marked ~ is an estimate: a deflate stream's parts share its compressed bytes.");
+    Console.WriteLine();
+    Console.WriteLine($"  {"part",-52} {"count",11} {"uncompressed",14} {"on disk",14} {"of file",8}");
+
+    void Print(SizeEntry entry, int depth)
+    {
+        string name = new string(' ', depth * 2) + entry.Name;
+        Console.WriteLine($"  {Trim(name, 52),-52} {(entry.Count > 0 ? entry.Count.ToString("N0") : ""),11} " +
+                          $"{entry.RawBytes,14:N0} {(entry.StoredIsEstimate ? "~" : "") + entry.StoredBytes.ToString("N0"),14} " +
+                          $"{100.0 * entry.StoredBytes / Math.Max(1, size.FileSize),7:0.0}%");
+        foreach (var child in entry.Children)
+            Print(child, depth + 1);
+    }
+
+    foreach (var section in size.Sections)
+        Print(section, 0);
     return 0;
 }
