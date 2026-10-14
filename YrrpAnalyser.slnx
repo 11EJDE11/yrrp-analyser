@@ -6,6 +6,5 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/YrrpAnalyser.AppTests/YrrpAnalyser.AppTests.csproj" />
-    <Project Path="tests/YrrpAnalyser.CompatibilityTests/YrrpAnalyser.CompatibilityTests.csproj" />
   </Folder>
 </Solution>

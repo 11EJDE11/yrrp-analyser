@@ -13,8 +13,11 @@ public sealed class ReplayHeaderInfo
     public int RandomNext1 { get; init; }
     public int RandomNext2 { get; init; }
     public uint[] RandomizerTable { get; init; } = [];
+    /// <summary>Bytes on disk: the INIs are raw deflate. SpawnIniRawSize and SpawnMapRawSize are the inflated sizes.</summary>
     public uint SpawnIniSize { get; init; }
     public uint SpawnMapSize { get; init; }
+    public uint SpawnIniRawSize { get; init; }
+    public uint SpawnMapRawSize { get; init; }
     public uint RecordedGameSpeed { get; init; }
     public ulong RecordedUnixTime { get; init; }
     public uint TotalFrames { get; init; }
@@ -27,6 +30,8 @@ public sealed class ReplayHeaderInfo
     /// <summary>Absolute file offset of the statistics section; 0 when there is none, or the header predates it.</summary>
     public ulong StatisticsOffset { get; init; }
     public uint StatisticsSize { get; init; }
+    /// <summary>The section is raw deflate; this is its inflated size.</summary>
+    public uint StatisticsRawSize { get; init; }
 
     public bool HasStatisticsSection => StatisticsOffset != 0 || StatisticsSize != 0;
 
@@ -67,19 +72,11 @@ public sealed class SideChannelEvent
     public Coord3D Coord { get; init; }
     public string SenderName { get; init; } = "";
     public string Text { get; init; } = "";
+    /// <summary>Chat only: the salt the sender's ChatFingerprint was computed with, when the message carried one.</summary>
+    public byte[]? Salt { get; init; }
 
     public string TypeName => Enum.IsDefined(Type) ? Type.ToString() : $"Unknown({RawType})";
 }
-
-/// <summary>
-/// How many objects the simulation was holding, and the unique ID the next one would get. The
-/// older spawner builds wrote this beside the state hash: an object created or destroyed on one
-/// side only shows up here on the frame it happens, where the hash can stay clean for thousands
-/// of frames afterwards.
-/// </summary>
-public readonly record struct FrameObjectCensus(int AbstractCount, int ScenarioUniqueId);
-
-public readonly record struct FrameRandomState(int Next1, int Next2);
 
 /// <summary>
 /// What a payment into a house's balance was for. Decided here, from the caller the recorder wrote
@@ -156,7 +153,7 @@ public readonly record struct HouseStatsSample(
     public int ArmyCount => Units + Infantry + Aircraft;
 }
 
-/// <summary>What kind of object an ObjectAppearRecord describes, and so which type table its type indexes.</summary>
+/// <summary>What kind of object a type table entry or a map marker is.</summary>
 public enum ObjectKind : byte { Unit = 0, Infantry = 1, Aircraft = 2, Building = 3 }
 
 [Flags]
@@ -165,71 +162,34 @@ public enum ObjectFlags : byte
     None = 0,
     Veteran = 1 << 0,
     Elite = 1 << 1,
-    // Bit 2 is unused: the recorder no longer writes "in the air"; Height carries the altitude.
     Cloaked = 1 << 3,
 }
 
-public enum GoneReason : byte
+/// <summary>A seal of the canonical hash chain: SealRecord. Hash covers everything through ThroughFrame.</summary>
+public sealed record SealRecord(int ThroughFrame, byte[] Hash)
 {
-    /// <summary>Left the map without being destroyed: sold, deployed, entered a transport or building, grinded.</summary>
-    Removed = 0,
-    /// <summary>Destroyed: the engine recorded the kill.</summary>
-    Destroyed = 1,
-}
-
-/// <summary>An object came onto the map, or changed owner or type: ObjectAppearRecord.</summary>
-public readonly record struct ObjectAppear(uint Id, ushort TypeIndex, ObjectKind Kind, byte Owner,
-    byte FoundationWidth, byte FoundationHeight);
-
-/// <summary>
-/// Where an object is now, when it moved or its state changed since the previous snapshot:
-/// ObjectUpdateRecord. X and Y are sixteenths of a cell; Height is the coordinate's Z / 16.
-/// </summary>
-public readonly record struct ObjectUpdate(uint Id, ushort X, ushort Y, byte Health, byte Mission,
-    ObjectFlags Flags, byte Height)
-{
-    public double CellX => X / (double)ReplayFormat.ObjectPositionUnitsPerCell;
-    public double CellY => Y / (double)ReplayFormat.ObjectPositionUnitsPerCell;
-    /// <summary>Health as a fraction, 0 to 1.</summary>
-    public double HealthRatio => Health / 255.0;
-}
-
-/// <summary>An object left the map: ObjectGoneRecord. KillerHouse is 0xFF when nobody is credited.</summary>
-public readonly record struct ObjectGone(uint Id, ushort X, ushort Y, GoneReason Reason, byte KillerHouse)
-{
-    public double CellX => X / (double)ReplayFormat.ObjectPositionUnitsPerCell;
-    public double CellY => Y / (double)ReplayFormat.ObjectPositionUnitsPerCell;
-    public int? Killer => KillerHouse == 0xFF ? null : KillerHouse;
-}
-
-/// <summary>One frame's Objects block: what changed on the map since the previous snapshot.</summary>
-public sealed class ObjectSnapshot
-{
-    public ObjectAppear[] Appeared { get; init; } = [];
-    public ObjectUpdate[] Updated { get; init; } = [];
-    public ObjectGone[] Gone { get; init; } = [];
+    public string HashHex => Convert.ToHexString(Hash).ToLowerInvariant();
 }
 
 /// <summary>
-/// One frame's record. Blocks are present only when the matching flag is set; the writer omits
-/// a block whose value has not changed since the last written frame.
+/// One frame's record. A block is present only when the frame carried it; the writer omits a block
+/// whose value has not changed since the last written frame.
 /// </summary>
 public sealed class FrameRecord
 {
     public int FrameNumber;
-    public uint Flags;
     public Point2D? TacticalPos;
     public uint[]? SelectionIds;
     public SideChannelEvent[]? SideChannel;
-    public uint? GameCrc;
-    public FrameObjectCensus? Census;
-    public FrameRandomState? RandomState;
+    /// <summary>The low 16 bits of the engine's state hash; only those are stored.</summary>
+    public ushort? GameCrc;
     public int? GameSpeed;
     public uint[]? SelectionTriggerIds;
     public HouseStatsSample[]? HouseStats;
     public MoneyIn[]? MoneyIn;
-    public ObjectSnapshot? Objects;
-    public byte[]? Extension;
+    public SealRecord[]? Seals;
+    /// <summary>Tags of blocks this build does not know, which were skipped.</summary>
+    public uint[]? UnknownBlocks;
 
     /// <summary>Index of this frame's first event in <see cref="ReplayDocument.Events"/>.</summary>
     public int EventStart;

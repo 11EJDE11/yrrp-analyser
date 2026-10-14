@@ -81,21 +81,17 @@ public static class Exporters
     public static void WriteFrameCrcCsv(string path, ReplayDocument doc)
     {
         using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
-        writer.WriteLine("Frame,Time,GameCRC,ObjectCount,NextUniqueID,GameSpeed,Events,Flags,RandomNext1,RandomNext2,SelectionTriggerIDs");
+        writer.WriteLine("Frame,Time,GameCRC,GameSpeed,Events,SelectionTriggerIDs,Seals");
         foreach (var f in doc.Frames)
         {
             writer.WriteLine(string.Join(',',
                 f.FrameNumber,
                 Csv(doc.TimeLabel(f.FrameNumber)),
-                f.GameCrc is { } crc ? crc.ToString("X8") : "",
-                f.Census is { } census ? census.AbstractCount.ToString() : "",
-                f.Census is { } ids ? ids.ScenarioUniqueId.ToString() : "",
+                f.GameCrc is { } crc ? crc.ToString("X4") : "",
                 f.GameSpeed is { } speed ? speed.ToString() : "",
                 f.EventCount,
-                $"0x{f.Flags:X2}",
-                f.RandomState is { } rng1 ? rng1.Next1.ToString() : "",
-                f.RandomState is { } rng2 ? rng2.Next2.ToString() : "",
-                Csv(f.SelectionTriggerIds is { } triggers ? string.Join(" ", triggers) : "")));
+                Csv(f.SelectionTriggerIds is { } triggers ? string.Join(" ", triggers) : ""),
+                Csv(f.Seals is { } seals ? string.Join(" ", seals.Select(x => $"{x.ThroughFrame}:{x.HashHex}")) : "")));
         }
     }
 
@@ -294,8 +290,7 @@ public static class Exporters
                 compressedBytes = doc.CompressedStreamBytes,
                 inflatedBytes = doc.InflatedStreamBytes,
                 compressionRatio = Math.Round(doc.CompressionRatio, 2),
-                objectCensuses = doc.CensusFrameCount,
-                randomStates = doc.Frames.Count(f => f.RandomState.HasValue),
+                seals = Canonical.SealsOf(doc).Count(),
                 selectionTriggers = doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)),
                 sawEndOfStream = doc.SawEndOfStream,
                 truncated = doc.Truncated,

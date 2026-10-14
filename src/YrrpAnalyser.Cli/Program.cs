@@ -15,6 +15,8 @@ if (args.Length == 0)
           yrrp --export <replay.yrrp> <outdir>   write every CSV/JSON export
           yrrp --saves <replay.yrrp> [outdir]    list the embedded saves, or write them out as .SAV
           yrrp --size <replay.yrrp>              where the file's bytes go
+          yrrp --verify <replay.yrrp>            check the seals and chat against the file's own contents
+          yrrp --compare-seals <a.yrrp> <b.yrrp> check two copies of one game against each other
         """);
     return 0;
 }
@@ -28,6 +30,8 @@ try
         case "--export" when args.Length >= 3: return Export(args[1], args[2]);
         case "--saves" when args.Length >= 2: return Saves(args[1], args.Length >= 3 ? args[2] : null);
         case "--size" when args.Length >= 2: return Size(args[1]);
+        case "--verify" when args.Length >= 2: return Verify(args[1]);
+        case "--compare-seals" when args.Length >= 3: return CompareSeals(args[1], args[2]);
         default: return Report(args);
     }
 }
@@ -40,6 +44,57 @@ catch (Exception ex)
 {
     Console.Error.WriteLine($"error: {ex}");
     return 3;
+}
+
+// Exit code 0 when everything the file carries checks out, 1 when something does not.
+static int Verify(string path)
+{
+    var doc = ReplayReader.Load(path);
+    var result = Canonical.Verify(doc);
+    Console.WriteLine(doc.FileName);
+
+    if (!result.HasSeals)
+        Console.WriteLine("  no canonical seals - recorded before they existed, or the hash was unavailable");
+    else
+    {
+        int good = result.StreamSeals.Count(s => s.Matches);
+        Console.WriteLine($"  seals in the frame stream   {good:N0} of {result.StreamSeals.Count:N0} match its contents" +
+                          (result.FirstBadSealFrame >= 0 ? $" - first bad one ends at frame {result.FirstBadSealFrame:N0}" : ""));
+        Console.WriteLine(result.FinalSeal is null
+            ? "  final seal                  none - the recording did not close cleanly"
+            : $"  final seal                  through frame {result.FinalSeal.ThroughFrame:N0}, " +
+              (result.FinalSealMatches == true ? "matches" : "DOES NOT MATCH"));
+    }
+
+    int verified = result.Chat.Count(c => c.Status == Canonical.ChatStatus.Verified);
+    int unsalted = result.Chat.Count(c => c.Status == Canonical.ChatStatus.NoSalt);
+    int missing = result.Chat.Count(c => c.Status == Canonical.ChatStatus.NoFingerprint);
+    Console.WriteLine($"  chat                        {verified:N0} verified, {missing:N0} with no matching fingerprint, " +
+                      $"{unsalted:N0} without a salt");
+    foreach (var c in result.Chat.Where(c => c.Status == Canonical.ChatStatus.NoFingerprint))
+        Console.WriteLine($"    ! frame {c.Message.FrameNumber:N0} {c.Message.SenderName}: {c.Message.Text}");
+
+    return result.AllMatch && missing == 0 ? 0 : 1;
+}
+
+static int CompareSeals(string a, string b)
+{
+    var left = ReplayReader.Load(a);
+    var right = ReplayReader.Load(b);
+    var result = Canonical.CompareSeals(left, right);
+    Console.WriteLine($"{left.FileName}\n{right.FileName}");
+
+    if (result.Compared == 0)
+    {
+        Console.WriteLine("  no shared seals to compare");
+        return 1;
+    }
+
+    Console.WriteLine(result.FirstDifferingFrame < 0
+        ? $"  all {result.Compared:N0} shared intervals agree - the same game, unedited, through frame {result.LastMatchingFrame:N0}"
+        : $"  agree through frame {result.LastMatchingFrame:N0}; differ from the interval ending at frame " +
+          $"{result.FirstDifferingFrame:N0} ({left.TimeLabel(result.FirstDifferingFrame)})");
+    return result.FirstDifferingFrame < 0 ? 0 : 1;
 }
 
 static (ReplayDocument Doc, EventDescriber Describer) Load(string path, string[] rulesPaths)
@@ -75,7 +130,7 @@ static int Report(string[] args)
                           : ""));
     Console.WriteLine($"Shutdown        {(doc.Header.CleanShutdown ? "clean" : "NOT CLEAN - recording cut short")}");
     Console.WriteLine($"Stream          {doc.Frames.Count:N0} frame records, {doc.EventCount:N0} events, " +
-                      $"{doc.CensusFrameCount:N0} censuses, {doc.CompressionRatio:0.0}x compression");
+                      $"{Canonical.SealsOf(doc).Count():N0} seals, {doc.CompressionRatio:0.0}x compression");
     Console.WriteLine($"Checkpoints     {doc.CheckpointSummary}");
     if (!doc.HasEmbeddedMap)
         Console.WriteLine("Map             not embedded - the scenario lives in the game's own mixes");
@@ -200,28 +255,21 @@ static int Compare(string leftPath, string rightPath)
     Console.WriteLine($"Compared {result.ComparedFrames:N0} frames " +
                       $"({result.LeftOnlyFrames:N0} / {result.RightOnlyFrames:N0} present on one side only)");
 
-    if (result.ComparedCensusFrames > 0)
+    if (result.Seals.Compared > 0)
     {
-        Console.WriteLine($"Compared {result.ComparedCensusFrames:N0} object censuses");
-        if (result.FirstCensusDivergenceFrame >= 0)
-        {
-            Console.WriteLine($"  object sets differ from frame {result.FirstCensusDivergenceFrame:N0} " +
-                              $"({left.TimeLabel(result.FirstCensusDivergenceFrame)}): " +
-                              $"{result.LeftCensusAtDivergence.AbstractCount} objects / next ID " +
-                              $"{result.LeftCensusAtDivergence.ScenarioUniqueId}  vs  " +
-                              $"{result.RightCensusAtDivergence.AbstractCount} / " +
-                              $"{result.RightCensusAtDivergence.ScenarioUniqueId}");
-            Console.WriteLine($"  {result.CensusDivergentFrames:N0} of them differ in total");
-        }
+        Console.WriteLine(result.Seals.FirstDifferingFrame < 0
+            ? $"Canonical seals agree on all {result.Seals.Compared:N0} shared intervals"
+            : $"Canonical seals agree through frame {result.Seals.LastMatchingFrame:N0} and differ from the " +
+              $"interval ending at frame {result.Seals.FirstDifferingFrame:N0} ({left.TimeLabel(result.Seals.FirstDifferingFrame)})");
     }
 
     if (result.FirstDivergenceFrame < 0)
     {
-        Console.WriteLine(result.FirstCensusDivergenceFrame < 0
+        Console.WriteLine(result.Seals.FirstDifferingFrame < 0
             ? "Every compared frame hashes identically - the two simulations stayed in step."
-            : "Frame hashes all match, but the object sets do not - something exists on one side "
-              + "only without having moved the hash yet.");
-        return result.FirstCensusDivergenceFrame < 0 ? 0 : 1;
+            : "Frame hashes all match, but the canonical seals do not - the recordings carry different "
+              + "orders, or one of them was edited.");
+        return result.Seals.FirstDifferingFrame < 0 ? 0 : 1;
     }
 
     Console.WriteLine($"First divergence at frame {result.FirstDivergenceFrame:N0} " +

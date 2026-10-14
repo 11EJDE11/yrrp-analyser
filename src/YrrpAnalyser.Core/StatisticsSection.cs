@@ -149,6 +149,9 @@ public sealed class ReplayStatistics
     /// <summary>The process's loaded modules, to resolve a payment's absolute caller.</summary>
     public List<ModuleInfo> Modules { get; } = [];
 
+    /// <summary>Every seal of the canonical hash chain, the last over whatever followed the final full interval.</summary>
+    public List<SealRecord> Seals { get; } = [];
+
     public HouseSummary? ForHouse(int houseIndex) => Houses.FirstOrDefault(h => h.HouseIndex == houseIndex);
 }
 
@@ -181,9 +184,30 @@ public static class StatisticsSectionReader
             return null;
         }
 
-        var bytes = new byte[size];
+        var stored = new byte[size];
         file.Position = (long)offset;
-        file.ReadExactly(bytes);
+        file.ReadExactly(stored);
+
+        // The section is raw deflate, of StatisticsRawSize bytes once inflated.
+        if (header.StatisticsRawSize == 0 || header.StatisticsRawSize > ReplayFormat.MaxStatisticsSectionBytes)
+        {
+            warnings.Add($"The header gives the statistics section an inflated size of {header.StatisticsRawSize:N0} bytes; it was not read.");
+            return null;
+        }
+
+        var bytes = new byte[header.StatisticsRawSize];
+        try
+        {
+            using var inflate = new System.IO.Compression.DeflateStream(new MemoryStream(stored),
+                System.IO.Compression.CompressionMode.Decompress);
+            inflate.ReadExactly(bytes);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+        {
+            warnings.Add($"The statistics section does not inflate ({ex.Message.Trim()}); it was not read.");
+            return null;
+        }
+
         return Parse(bytes, warnings);
     }
 
@@ -212,6 +236,8 @@ public static class StatisticsSectionReader
                 problem = ReadGame(chunk, stats);
             else if (tag == ReplayFormat.ChunkModules)
                 problem = ReadModules(chunk, stats);
+            else if (tag == ReplayFormat.ChunkSeals)
+                problem = ReadSeals(chunk, stats);
             else if (tag == ReplayFormat.ChunkStatsPacket)
             {
                 stats.StatsPacketBytes = bytes.AsSpan(chunk.Position, (int)length).ToArray();
@@ -223,6 +249,17 @@ public static class StatisticsSectionReader
         }
 
         return stats;
+    }
+
+    private static string? ReadSeals(Cursor c, ReplayStatistics stats)
+    {
+        if (!c.TryU32(out uint count) || count > 1_000_000) return "seal count";
+        for (int i = 0; i < count; i++)
+        {
+            if (!c.TryI32(out int through) || !c.TryBytes(ReplayFormat.SealHashBytes, out var hash)) return $"seal {i}";
+            stats.Seals.Add(new SealRecord(through, hash.ToArray()));
+        }
+        return null;
     }
 
     private static string TagText(uint tag) =>

@@ -61,8 +61,7 @@ internal sealed partial class MainForm
                       $" / {doc.LastRecordedFrame:N0}");
         sb.AppendLine($"  header TotalFrames  {doc.Header.TotalFrames:N0}");
         sb.AppendLine($"  events              {doc.EventCount:N0}");
-        sb.AppendLine($"  object censuses     {doc.CensusFrameCount:N0}");
-        sb.AppendLine($"  RNG cursor snapshots {doc.Frames.Count(f => f.RandomState.HasValue):N0}");
+        sb.AppendLine($"  canonical seals     {Canonical.SealsOf(doc).Count():N0}");
         sb.AppendLine($"  selection triggers  {doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)):N0}");
         sb.AppendLine($"  house stat samples  {doc.HouseStatsFrameCount:N0} frames");
         sb.AppendLine($"  game speed changes  {doc.GameSpeed.Changes.Count():N0}");
@@ -70,17 +69,15 @@ internal sealed partial class MainForm
                       "uncompressed");
         sb.AppendLine();
 
-        var flagCounts = doc.Frames
-            .GroupBy(f => f.Flags)
+        var blockCounts = doc.Frames
+            .GroupBy(DescribeBlocks)
             .OrderByDescending(g => g.Count())
             .ToList();
 
-        sb.AppendLine("RECORD FLAG COMBINATIONS");
-        sb.AppendLine("  Blocks are stored bare and in write order: TacticalPos, Selection, SideChannel,");
-        sb.AppendLine("  GameCRC, ObjectCensus, RandomState, GameSpeed, SelectionTriggers, HouseStats, Extensions.");
-        sb.AppendLine("  Gameplay events follow those blocks; this is not numeric flag-bit order.");
-        foreach (var group in flagCounts)
-            sb.AppendLine($"  0x{group.Key:X2}  {DescribeFlags(group.Key),-52} {group.Count(),8:N0}");
+        sb.AppendLine("RECORD BLOCK COMBINATIONS");
+        sb.AppendLine("  Each block is tagged and length-prefixed; a tag this build does not know is skipped.");
+        foreach (var group in blockCounts)
+            sb.AppendLine($"  {group.Key,-64} {group.Count(),8:N0}");
         sb.AppendLine();
 
         // A monotonic-but-not-contiguous frame sequence is legal; the format only promises
@@ -161,23 +158,20 @@ internal sealed partial class MainForm
         _diagnosticsBox.Text = Normalise(sb.ToString());
     }
 
-    private static string DescribeFlags(uint flags)
+    private static string DescribeBlocks(FrameRecord f)
     {
-        if (flags == 0) return "(none)";
         var parts = new List<string>();
-        if ((flags & (uint)FrameRecordFlags.TacticalPos) != 0) parts.Add("TacticalPos");
-        if ((flags & (uint)FrameRecordFlags.Selection) != 0) parts.Add("Selection");
-        if ((flags & (uint)FrameRecordFlags.SideChannel) != 0) parts.Add("SideChannel");
-        if ((flags & (uint)FrameRecordFlags.GameCrc) != 0) parts.Add("GameCRC");
-        if ((flags & (uint)FrameRecordFlags.ObjectCensus) != 0) parts.Add("ObjectCensus");
-        if ((flags & (uint)FrameRecordFlags.RandomState) != 0) parts.Add("RandomState");
-        if ((flags & (uint)FrameRecordFlags.GameSpeed) != 0) parts.Add("GameSpeed");
-        if ((flags & (uint)FrameRecordFlags.SelectionTriggers) != 0) parts.Add("SelectionTriggers");
-        if ((flags & (uint)FrameRecordFlags.HouseStats) != 0) parts.Add("HouseStats");
-        if ((flags & (uint)FrameRecordFlags.Extensions) != 0) parts.Add("Extensions");
-        uint unknown = flags & ~(uint)FrameRecordFlags.Known;
-        if (unknown != 0) parts.Add($"unknown 0x{unknown:X}");
-        return string.Join(" | ", parts);
+        if (f.GameCrc.HasValue) parts.Add("GameCRC");
+        if (f.TacticalPos.HasValue) parts.Add("TacticalPos");
+        if (f.SelectionIds is not null) parts.Add("Selection");
+        if (f.SideChannel is not null) parts.Add("SideChannel");
+        if (f.GameSpeed.HasValue) parts.Add("GameSpeed");
+        if (f.SelectionTriggerIds is not null) parts.Add("SelectionTriggers");
+        if (f.HouseStats is not null) parts.Add("HouseStats");
+        if (f.MoneyIn is not null) parts.Add("MoneyIn");
+        if (f.Seals is not null) parts.Add("Seal");
+        if (f.UnknownBlocks is not null) parts.Add($"unknown tags {string.Join(",", f.UnknownBlocks)}");
+        return parts.Count == 0 ? "(none)" : string.Join(" | ", parts);
     }
 
     // --- comparison -------------------------------------------------------------------------

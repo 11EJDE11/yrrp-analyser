@@ -217,10 +217,8 @@ internal sealed partial class MainForm : Form
         _statistics = StatisticsAnalysis.Build(doc);
         _teams = TeamAnalysis.Build(doc, _statistics);
         _win = WinLikelihood.Build(doc, _statistics, _teams);
-        _match = MatchAnalysis.Build(doc, _statistics, _types);
 
         PopulateOverview(doc, _network, _activity);
-        PopulateMatch(doc);
         PopulateTeams(doc);
         PopulateStatistics(doc, _statistics);
         PopulateSaves(doc);

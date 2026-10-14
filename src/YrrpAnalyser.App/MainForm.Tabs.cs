@@ -137,7 +137,6 @@ internal sealed partial class MainForm
         }
 
         _tabs.TabPages.Add(NewPage("Overview", Scrollable(_overviewFlow)));
-        _tabs.TabPages.Add(NewPage("Match", BuildMatchTab()));
         _tabs.TabPages.Add(NewPage("Teams", Scrollable(_teamsFlow)));
         _tabs.TabPages.Add(NewPage("Statistics", BuildStatisticsPage()));
         _tabs.TabPages.Add(NewPage("Events", BuildEventsTab()));

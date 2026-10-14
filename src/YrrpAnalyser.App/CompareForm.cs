@@ -58,11 +58,11 @@ internal sealed class CompareForm : Form
 
         if (result.FirstDivergenceFrame < 0 && result.ComparedFrames > 0)
         {
-            verdict = result.FirstCensusDivergenceFrame < 0
+            verdict = result.Seals.FirstDifferingFrame < 0
                 ? $"In step. All {result.ComparedFrames:N0} shared frames hash identically."
-                : $"Hashes match, but the object sets diverge at frame " +
-                  $"{result.FirstCensusDivergenceFrame:N0}.";
-            verdictColor = result.FirstCensusDivergenceFrame < 0 ? Theme.Good : Theme.Warning;
+                : $"Hashes match, but the canonical seals differ from frame " +
+                  $"{result.Seals.FirstDifferingFrame:N0}.";
+            verdictColor = result.Seals.FirstDifferingFrame < 0 ? Theme.Good : Theme.Warning;
         }
         else if (result.ComparedFrames == 0)
         {
@@ -86,25 +86,19 @@ internal sealed class CompareForm : Form
             Margin = new Padding(0, 0, 0, 6),
         });
 
-        // The census is the sharper of the two signals where both files carry one: an object
-        // created or destroyed on one side only moves the count on the frame it happens, where
-        // the hash can stay clean for thousands of frames afterwards.
-        if (result.ComparedCensusFrames > 0)
+        // Two copies of the same game agree on every full interval both reached; the first one
+        // that differs is where they part - a desync, or an edit.
+        if (result.Seals.Compared > 0)
         {
             panel.Controls.Add(new Label
             {
-                Text = result.FirstCensusDivergenceFrame < 0
-                    ? $"Object sets match across all {result.ComparedCensusFrames:N0} shared censuses."
-                    : $"Object sets differ from frame {result.FirstCensusDivergenceFrame:N0} " +
-                      $"({left.TimeLabel(result.FirstCensusDivergenceFrame)}) — " +
-                      $"{result.LeftCensusAtDivergence.AbstractCount:N0} objects / next ID " +
-                      $"{result.LeftCensusAtDivergence.ScenarioUniqueId:N0}  vs  " +
-                      $"{result.RightCensusAtDivergence.AbstractCount:N0} / " +
-                      $"{result.RightCensusAtDivergence.ScenarioUniqueId:N0}. Something was created " +
-                      $"or destroyed on one side only; {result.CensusDivergentFrames:N0} of " +
-                      $"{result.ComparedCensusFrames:N0} censuses differ.",
+                Text = result.Seals.FirstDifferingFrame < 0
+                    ? $"Canonical seals agree on all {result.Seals.Compared:N0} shared intervals."
+                    : $"Canonical seals agree through frame {result.Seals.LastMatchingFrame:N0} and differ from " +
+                      $"the interval ending at frame {result.Seals.FirstDifferingFrame:N0} " +
+                      $"({left.TimeLabel(result.Seals.FirstDifferingFrame)}).",
                 Font = Theme.UiBold,
-                ForeColor = result.FirstCensusDivergenceFrame < 0 ? Theme.Good : Theme.Danger,
+                ForeColor = result.Seals.FirstDifferingFrame < 0 ? Theme.Good : Theme.Danger,
                 AutoSize = true,
                 MaximumSize = new Size(1040, 0),
                 Margin = new Padding(0, 0, 0, 8),

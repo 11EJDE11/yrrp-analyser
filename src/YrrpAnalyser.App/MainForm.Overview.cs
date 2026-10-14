@@ -118,15 +118,12 @@ internal sealed partial class MainForm
             ("Frames with a state hash", $"{doc.Frames.Count(f => f.GameCrc.HasValue):N0}"),
             ("Camera moves recorded", $"{doc.Frames.Count(f => f.TacticalPos.HasValue):N0}"),
             ("Selection changes", $"{doc.Frames.Count(f => f.SelectionIds is not null):N0}"),
-            ("Object censuses", doc.CensusFrameCount > 0
-                ? $"{doc.CensusFrameCount:N0}"
-                : "none (not emitted by the current recorder)"),
-            ("RNG cursor snapshots", $"{doc.Frames.Count(f => f.RandomState.HasValue):N0}"),
+            ("Canonical seals", $"{Canonical.SealsOf(doc).Count():N0}"),
             ("Selection triggers", $"{doc.Frames.Sum(f => (long)(f.SelectionTriggerIds?.Length ?? 0)):N0}"),
             ("Embedded map", doc.HasEmbeddedMap
-                ? $"spawnmap.ini, {doc.Header.SpawnMapSize:N0} bytes"
+                ? $"spawnmap.ini, {doc.Header.SpawnMapRawSize:N0} bytes ({doc.Header.SpawnMapSize:N0} compressed)"
                 : "not embedded — the scenario lives in the game's own mixes"),
-            ("Extension blocks", doc.HasExtensionBlocks ? "present" : "none (nothing writes one yet)"),
+            ("Unknown blocks", doc.Frames.Any(f => f.UnknownBlocks is not null) ? "present (a newer recorder)" : "none"),
             ("Type names", _types.HasData
                 ? $"resolved from {_types.SourceDescription}"
                 : "not resolved — set a rules INI under Tools"),

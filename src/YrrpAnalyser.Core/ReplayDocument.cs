@@ -8,7 +8,9 @@ public sealed class ReplayDocument
     public required ReplayHeaderInfo Header { get; init; }
 
     public string SpawnIniText { get; init; } = "";
-    public string SpawnMapText { get; init; } = "";
+    /// <summary>The embedded map exactly as the game read it - the canonical hash covers these bytes.</summary>
+    public byte[] SpawnMapBytes { get; init; } = [];
+    public string SpawnMapText { get; set; } = "";
 
     public IniDocument SpawnIni { get; set; } = IniDocument.Empty;
     public IniDocument SpawnMapIni { get; set; } = IniDocument.Empty;
@@ -21,7 +23,7 @@ public sealed class ReplayDocument
 
     public List<FrameRecord> Frames { get; set; } = [];
 
-    /// <summary>All recorded events, back to back, 111 bytes each.</summary>
+    /// <summary>All recorded events, back to back, 111 bytes each: unpacked from the stream into EventClass layout.</summary>
     public byte[] EventBlob { get; set; } = [];
 
     /// <summary>The frame stream only - it ends where the checkpoint archive begins, if there is one.</summary>
@@ -58,11 +60,6 @@ public sealed class ReplayDocument
     /// <summary>The stream stopped part-way through a record.</summary>
     public bool Truncated { get; set; }
 
-    public bool HasExtensionBlocks { get; set; }
-
-    /// <summary>The recorder wrote where every object was: the map can show real positions, not estimates.</summary>
-    public bool HasObjectSnapshots { get; set; }
-
     public List<string> Warnings { get; } = [];
 
     /// <summary>Speed the simulation ran at over time; one segment unless someone moved the slider.</summary>
@@ -70,8 +67,6 @@ public sealed class ReplayDocument
 
     /// <summary>False for a campaign recording, which names a scenario inside the game's own mixes.</summary>
     public bool HasEmbeddedMap => Header.SpawnMapSize > 0;
-
-    public int CensusFrameCount { get; set; }
 
     public string FileName => Path.GetFileName(FilePath);
 

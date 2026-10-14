@@ -3,8 +3,8 @@
 Reads `.yrrp` replays — the recording format written by the CnCNet [yrpp-spawner](https://github.com/CnCNet/yrpp-spawner)
 for Red Alert 2: Yuri's Revenge. It does not play them; it opens one and shows what is actually
 inside: who played, what they did, how their connections behaved, and — given both peers'
-recordings of one match — the exact frame a desync started on, from either the per-frame state
-hash or the object census, whichever moved first.
+recordings of one match — the exact frame a desync started on, from the per-frame state hash, and
+whether the two copies are the same unedited game, from their canonical seals.
 
 ```
 dotnet build
@@ -13,7 +13,8 @@ dotnet run --project src/YrrpAnalyser.App -- "path\to\replay.yrrp"
 
 .NET 8, no external dependencies. `src/YrrpAnalyser.Core` is the parser and analysis on its own;
 `src/YrrpAnalyser.Cli` is a headless `yrrp` command for batch work (`--scan` a folder, `--compare`
-two recordings, `--export` every CSV/JSON).
+two recordings, `--export` every CSV/JSON, `--verify` a file's seals and chat, `--compare-seals` two
+copies of one game).
 
 ## Overview
 
@@ -23,39 +24,17 @@ reproduces.
 
 ![Overview](docs/overview.png)
 
-## Match
-
-The game on its own map, with a play/pause/seek bar. The map is drawn from the embedded
-spawnmap.ini: every cell coloured from the map's lobby preview, lifted to its height from
-`[IsoMapPack5]`, with cliff faces and the ore and gem fields from `[OverlayPack]`. On it: buildings,
-units (squares for vehicles, dots for infantry, triangles for aircraft), where each unit was ordered to
-over the last few seconds, trails, what was destroyed and where, beacons, superweapon strikes, start
-positions and roughly what the recording player was looking at. A heatmap can show where the
-fighting was, where the armies are, or where units were being sent. Wheel to zoom, drag to pan,
-double-click to fit; Space plays and pauses, the arrow keys step.
-
-Above the map, **likeliness to win** splits a bar between the teams at the current moment, with the
-whole game's history under it. It is the Replay Insights advantage index - army value, the last
-minute's income, base value and usable cash, relative to the other teams still playing - sharpened so
-its percentages match how often the favourite actually won across 20 recorded games. Hover a segment
-for what it is made of. It only ever looks backwards, so it never knows the result early.
-
-The seek bar shows how heavy the fighting was along the game and marks defeats, superweapons and the
-heaviest fights. The side panel is each team's scoreboard at the current moment - click a player to
-hide them on the map - and a feed of what happened, latest first; click an entry to jump there.
-
-Recordings from a spawner that writes object snapshots (the `Objects` frame block) show every object
-where the game had it, every 30 frames. Older recordings have no positions at all, so the map says so
-and estimates: a unit leaves its owner's start position towards each destination it was ordered to at
-a typical speed and fades when it has not been ordered for a while, and buildings stand where they were
-placed until their owner is defeated.
-
 ## Teams
 
 Who played with whom - the lobby's alliances, falling back to those held at the end of the game - and
 each team's result, players, totals and a side-by-side table; how each team's income, spending, army,
 production and kills split between its players; units and buildings destroyed team against team; and
 team timelines for the win estimate, army, income, money, base, kills and losses.
+
+The **win estimate** is the Replay Insights advantage index - army value, the last minute's income,
+base value and usable cash, relative to the other teams still playing - sharpened so its percentages
+match how often the favourite actually won across 20 recorded games. It only ever looks backwards, so
+it never knows the result early.
 
 ## Events
 
@@ -119,29 +98,17 @@ segments, and the derived house-index map.
 ## Keeping up with the format
 
 `src/YrrpAnalyser.Core/ReplayFormat.cs` mirrors the spawner's `ReplayFormat.h` by hand, the same
-way the CnCNet client's `ReplayGame.cs` does. There is no compile-time link, so a header change has
-to be made here too — a size or offset drift is silent, not an error. The spawner's
+way the CnCNet client's `YRReplayGame.cs` does, and `Canonical.cs` mirrors `ReplayCanonical.cpp`.
+There is no compile-time link, so a format change has to be made here too — a size or offset drift
+is silent, not an error, and a canonical-form drift makes every seal disagree. The spawner's
 `docs/replay-format.md` is the reference.
 
-The current reader matches the 1124-byte header and frame block order in spawner commit
-`fbf1e04` on `add-replays`. Map names and `GamePackageVersion` come from the embedded
-`spawn.ini`; DLL version bytes are no longer recorded. Earlier development headers (1452 or
-1128 bytes with metadata inserted before the simulation fields) are not supported. Format version
-1 was retained during those development changes.
+The reader matches the 1096-byte header and the tagged frame blocks of spawner commit `3bbcf71`
+on `yr-build`. Earlier recordings are not supported.
 
-Frame blocks are read in this order: camera, selection, side channel, CRC, object census, RNG
-cursors, game speed, selection triggers, extensions, then gameplay events. Census and RNG blocks
-remain readable even though the current recorder no longer emits them. Frame CSV exports include
-RNG cursors and selection-trigger IDs; summary JSON keeps INI metadata in its own `metadata` object.
-
-Run the dependency-free binary compatibility checks with:
-
-```
-dotnet run --project tests/YrrpAnalyser.CompatibilityTests
-```
-
-Fixtures use explicit wire offsets and block flags independently of `ReplayFormat.cs`, including
-combined blocks, appended header bytes, empty/campaign recordings, and truncated or invalid records.
+`yrrp --verify` checks a file against itself: every seal against the canonical chain recomputed from
+its contents, and every chat line against the fingerprints in its events. `yrrp --compare-seals`
+checks two copies of one game interval by interval.
 
 Run the Windows chart and list-view regression checks with:
 

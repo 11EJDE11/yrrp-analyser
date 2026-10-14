@@ -5,6 +5,9 @@ namespace YrrpAnalyser.App;
 
 internal sealed partial class MainForm
 {
+    private TeamAnalysis? _teams;
+    private WinLikelihood? _win;
+
     private readonly FlowLayoutPanel _teamsFlow = new()
     {
         Dock = DockStyle.Top,

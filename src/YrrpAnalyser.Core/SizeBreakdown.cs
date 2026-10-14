@@ -57,8 +57,8 @@ public sealed class SizeBreakdown
         long streamOffset = header.HeaderSize + (long)header.SpawnIniSize + header.SpawnMapSize;
 
         result.Sections.Add(Exact("Header", header.HeaderSize));
-        result.Sections.Add(Exact("spawn.ini", header.SpawnIniSize));
-        result.Sections.Add(Exact("spawnmap.ini (the map)", header.SpawnMapSize));
+        result.Sections.Add(Compressed("spawn.ini", header.SpawnIniRawSize, header.SpawnIniSize));
+        result.Sections.Add(Compressed("spawnmap.ini (the map)", header.SpawnMapRawSize, header.SpawnMapSize));
 
         file.Position = streamOffset;
         result.Sections.Add(MeasureFrameStream(file, doc.CompressedStreamBytes, cancel));
@@ -79,6 +79,9 @@ public sealed class SizeBreakdown
 
     private static SizeEntry Exact(string name, long bytes, long count = 0) =>
         new() { Name = name, RawBytes = bytes, StoredBytes = bytes, Count = count };
+
+    private static SizeEntry Compressed(string name, long rawBytes, long storedBytes) =>
+        new() { Name = name, RawBytes = rawBytes, StoredBytes = storedBytes };
 
     #region Frame stream
 
@@ -130,40 +133,57 @@ public sealed class SizeBreakdown
     }
 
     private const string Headers = "Frame record headers";
+    private const string Framing = "Block tags and lengths";
     private const string Camera = "Camera position";
     private const string Selection = "Selection";
     private const string Chat = "Chat and beacons";
     private const string Crc = "State hash (desync check)";
-    private const string Census = "Object census (old recordings)";
-    private const string Random = "RNG cursors (old recordings)";
     private const string Speed = "Game speed changes";
     private const string Triggers = "Selection triggers";
     private const string HouseStats = "House statistics samples";
     private const string MoneyIn = "Income payments";
-    private const string ObjectHeaders = "Block headers";
-    private const string ObjectAppear = "Appeared";
-    private const string ObjectUpdate = "Moved or changed";
-    private const string ObjectGone = "Left the map";
-    private const string Extensions = "Extension blocks";
+    private const string Seals = "Canonical seals";
+    private const string Unknown = "Blocks this build does not know";
     private const string Unparsed = "Unparsed (after a damaged record)";
+
+    /// <summary>Feeds each part of the stream to its bucket, as <see cref="FrameStream"/> walks it.</summary>
+    private sealed class BucketSink(Buckets buckets) : IFramePartSink
+    {
+        public long Consumed;
+
+        public void Add(FramePart part, ReadOnlySpan<byte> bytes, int count, byte eventType)
+        {
+            Consumed += bytes.Length;
+            var bucket = part switch
+            {
+                FramePart.Event => buckets.Event(eventType),
+                FramePart.RecordHead => buckets[Headers],
+                FramePart.Hash => buckets[Crc],
+                FramePart.BlockFraming => buckets[Framing],
+                FramePart.Camera => buckets[Camera],
+                FramePart.Selection => buckets[Selection],
+                FramePart.Chat => buckets[Chat],
+                FramePart.Speed => buckets[Speed],
+                FramePart.Triggers => buckets[Triggers],
+                FramePart.HouseStats => buckets[HouseStats],
+                FramePart.MoneyIn => buckets[MoneyIn],
+                FramePart.Seal => buckets[Seals],
+                _ => buckets[Unknown],
+            };
+            bucket.Add(bytes, count);
+        }
+    }
 
     private static SizeEntry MeasureFrameStream(Stream file, long compressedBytes, CancellationToken cancel)
     {
         using var buckets = new Buckets();
-        using var inflate = new DeflateStream(file, CompressionMode.Decompress, leaveOpen: true);
-        var cursor = new RawCursor(inflate);
-
-        try
-        {
-            ReadRecords(cursor, buckets, cancel);
-            // Whatever follows a record the walk could not make sense of still took space.
-            while (cursor.Read(1 << 16, out var rest) > 0)
-                buckets[Unparsed].Add(rest);
-        }
-        catch (InvalidDataException)
-        {
-            // A cut-short recording: what was measured stands.
-        }
+        var raw = FrameStream.Inflate(file, out _);
+        cancel.ThrowIfCancellationRequested();
+        var sink = new BucketSink(buckets);
+        FrameStream.Parse(raw, sink);
+        // Whatever follows a record the walk could not make sense of still took space.
+        if (sink.Consumed < raw.Length)
+            buckets[Unparsed].Add(raw.AsSpan((int)sink.Consumed));
 
         var stream = new SizeEntry { Name = "Frame stream", StoredBytes = compressedBytes };
         var estimates = new Dictionary<Bucket, long>();
@@ -204,10 +224,9 @@ public sealed class SizeBreakdown
         {
             Group("Events: player orders and commands", gameplay),
             Group("Events: network and timing", network),
-            Group("Object snapshots", [buckets[ObjectHeaders], buckets[ObjectAppear], buckets[ObjectUpdate], buckets[ObjectGone]]),
         };
-        foreach (var name in new[] { HouseStats, MoneyIn, Selection, Camera, Chat, Crc, Headers, Speed, Triggers,
-                     Census, Random, Extensions, Unparsed })
+        foreach (var name in new[] { HouseStats, MoneyIn, Selection, Camera, Chat, Crc, Headers, Framing, Speed, Triggers,
+                     Seals, Unknown, Unparsed })
         {
             var b = buckets[name];
             if (b.RawBytes > 0) parts.Add(Leaf(b));
@@ -228,98 +247,6 @@ public sealed class SizeBreakdown
     {
         entry.StoredBytes += drift;
         if (entry.Children.Count > 0) Nudge(entry.Children[0], drift);
-    }
-
-    /// <summary>
-    /// Walks the records in the order ReplayFrameCodec.cpp writes their blocks. The reader has already
-    /// validated the stream, so this only needs to stop, not to explain, when something does not fit.
-    /// </summary>
-    private static void ReadRecords(RawCursor cursor, Buckets buckets, CancellationToken cancel)
-    {
-        int records = 0;
-        while (true)
-        {
-            if ((++records & 0x3FFF) == 0) cancel.ThrowIfCancellationRequested();
-
-            if (!cursor.TryRead(ReplayFormat.FrameRecordHeaderSize, out var fh)) return;
-            buckets[Headers].Add(fh, 1);
-            int frame = BinaryPrimitives.ReadInt32LittleEndian(fh);
-            int events = BinaryPrimitives.ReadInt32LittleEndian(fh[4..]);
-            var flags = (FrameRecordFlags)BinaryPrimitives.ReadUInt32LittleEndian(fh[8..]);
-            if (frame == -1) return;
-            if (events < 0 || events > ReplayFormat.MaxEventsPerFrame || (flags & ~FrameRecordFlags.Known) != 0)
-                return;
-
-            bool Fixed(FrameRecordFlags flag, string name, int size)
-            {
-                if ((flags & flag) == 0) return true;
-                if (!cursor.TryRead(size, out var b)) return false;
-                buckets[name].Add(b, 1);
-                return true;
-            }
-
-            // A count, then that many fixed-size items; the count's bytes belong to the block.
-            bool Counted(FrameRecordFlags flag, string name, int itemSize, int max)
-            {
-                if ((flags & flag) == 0) return true;
-                if (!cursor.TryRead(4, out var cb)) return false;
-                int count = BinaryPrimitives.ReadInt32LittleEndian(cb);
-                buckets[name].Add(cb);
-                if (count < 0 || count > max) return false;
-                if (count == 0) return true;
-                if (!cursor.TryRead(count * itemSize, out var items)) return false;
-                buckets[name].Add(items, count);
-                return true;
-            }
-
-            if (!Fixed(FrameRecordFlags.TacticalPos, Camera, 8)
-                || !Counted(FrameRecordFlags.Selection, Selection, 4, ReplayFormat.MaxSelectionCount)
-                || !Counted(FrameRecordFlags.SideChannel, Chat, ReplayFormat.SideChannelRecordSize,
-                    ReplayFormat.SideChannelMaxEventsPerFrame)
-                || !Fixed(FrameRecordFlags.GameCrc, Crc, 4)
-                || !Fixed(FrameRecordFlags.ObjectCensus, Census, ReplayFormat.FrameObjectCensusSize)
-                || !Fixed(FrameRecordFlags.RandomState, Random, ReplayFormat.FrameRandomStateSize)
-                || !Fixed(FrameRecordFlags.GameSpeed, Speed, 4)
-                || !Counted(FrameRecordFlags.SelectionTriggers, Triggers, 4, ReplayFormat.MaxSelectionTriggersPerFrame)
-                || !Counted(FrameRecordFlags.HouseStats, HouseStats, ReplayFormat.HouseStatsSampleSize,
-                    ReplayFormat.MaxHouseStatsPerFrame)
-                || !Counted(FrameRecordFlags.MoneyIn, MoneyIn, ReplayFormat.MoneyInRecordSize, ReplayFormat.MaxMoneyInPerFrame))
-                return;
-
-            if ((flags & FrameRecordFlags.Objects) != 0)
-            {
-                if (!cursor.TryRead(ReplayFormat.ObjectsBlockHeaderSize, out var oh)) return;
-                buckets[ObjectHeaders].Add(oh, 1);
-                int appeared = BinaryPrimitives.ReadUInt16LittleEndian(oh);
-                int updated = BinaryPrimitives.ReadUInt16LittleEndian(oh[2..]);
-                int gone = BinaryPrimitives.ReadUInt16LittleEndian(oh[4..]);
-                foreach (var (name, count) in new[] { (ObjectAppear, appeared), (ObjectUpdate, updated), (ObjectGone, gone) })
-                {
-                    if (count == 0) continue;
-                    if (!cursor.TryRead(count * ReplayFormat.ObjectRecordSize, out var records2)) return;
-                    buckets[name].Add(records2, count);
-                }
-            }
-
-            if ((flags & FrameRecordFlags.Extensions) != 0)
-            {
-                if (!cursor.TryRead(4, out var lb)) return;
-                uint length = BinaryPrimitives.ReadUInt32LittleEndian(lb);
-                buckets[Extensions].Add(lb, 1);
-                if (length > ReplayFormat.MaxFrameExtensionBytes) return;
-                if (length > 0)
-                {
-                    if (!cursor.TryRead((int)length, out var ext)) return;
-                    buckets[Extensions].Add(ext);
-                }
-            }
-
-            for (int i = 0; i < events; i++)
-            {
-                if (!cursor.TryRead(ReplayFormat.EventSize, out var ev)) return;
-                buckets.Event(ev[0]).Add(ev, 1);
-            }
-        }
     }
 
     #endregion
@@ -400,10 +327,24 @@ public sealed class SizeBreakdown
 
     private static SizeEntry MeasureStatistics(Stream file, ReplayHeaderInfo header)
     {
-        var section = Exact("Statistics section", header.StatisticsSize);
-        var bytes = new byte[header.StatisticsSize];
+        var section = Compressed("Statistics section", header.StatisticsRawSize, header.StatisticsSize);
+        var stored = new byte[header.StatisticsSize];
         file.Position = (long)header.StatisticsOffset;
-        file.ReadExactly(bytes);
+        file.ReadExactly(stored);
+
+        var bytes = new byte[Math.Min(header.StatisticsRawSize, ReplayFormat.MaxStatisticsSectionBytes)];
+        try
+        {
+            using var inflate = new DeflateStream(new MemoryStream(stored), CompressionMode.Decompress);
+            inflate.ReadExactly(bytes);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+        {
+            return section;
+        }
+
+        // The section is one deflate stream, so its chunks share its compressed bytes out by size.
+        double share = header.StatisticsSize / (double)Math.Max(1, bytes.Length);
 
         int pos = 0;
         while (bytes.Length - pos >= 8)
@@ -411,12 +352,20 @@ public sealed class SizeBreakdown
             uint tag = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(pos));
             uint length = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(pos + 4));
             if (length > bytes.Length - pos - 8) break;
-            section.Children.Add(Exact(ChunkName(tag), length + 8));
+            section.Children.Add(new SizeEntry
+            {
+                Name = ChunkName(tag), RawBytes = length + 8,
+                StoredBytes = (long)Math.Round((length + 8) * share), StoredIsEstimate = true,
+            });
             pos += 8 + (int)length;
         }
 
         if (pos < bytes.Length)
-            section.Children.Add(Exact("Unparsed", bytes.Length - pos));
+            section.Children.Add(new SizeEntry
+            {
+                Name = "Unparsed", RawBytes = bytes.Length - pos,
+                StoredBytes = (long)Math.Round((bytes.Length - pos) * share), StoredIsEstimate = true,
+            });
         section.Children.Sort((x, y) => y.StoredBytes.CompareTo(x.StoredBytes));
         return section;
     }
@@ -428,6 +377,7 @@ public sealed class SizeBreakdown
         if (tag == ReplayFormat.ChunkStatsPacket) return "Game's statistics packet (STAT)";
         if (tag == ReplayFormat.ChunkGame) return "Game record (GAME)";
         if (tag == ReplayFormat.ChunkModules) return "Loaded modules (MODS)";
+        if (tag == ReplayFormat.ChunkSeals) return "Canonical seals (SEAL)";
         var chars = new char[4];
         for (int i = 0; i < 4; i++)
         {
@@ -438,28 +388,6 @@ public sealed class SizeBreakdown
     }
 
     #endregion
-
-    /// <summary>Exact-size reads that hand back the bytes, over a stream that returns short reads freely.</summary>
-    private sealed class RawCursor(Stream stream)
-    {
-        private byte[] _buffer = new byte[1 << 16];
-
-        public bool TryRead(int count, out ReadOnlySpan<byte> data) => Read(count, out data) == count;
-
-        public int Read(int count, out ReadOnlySpan<byte> data)
-        {
-            if (count > _buffer.Length) _buffer = new byte[count];
-            int total = 0;
-            while (total < count)
-            {
-                int n = stream.Read(_buffer, total, count - total);
-                if (n <= 0) break;
-                total += n;
-            }
-            data = _buffer.AsSpan(0, total);
-            return total;
-        }
-    }
 
     /// <summary>A write-only stream that only counts, so an estimate never holds its compressed bytes.</summary>
     private sealed class CountingStream : Stream

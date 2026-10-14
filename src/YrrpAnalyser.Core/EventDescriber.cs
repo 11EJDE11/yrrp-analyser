@@ -135,13 +135,19 @@ public sealed class EventDescriber(TypeNameResolver types)
 
             case EventType.FrameInfo:
             {
-                // u32 CRC; u16 CommandCount; u8 Delay. Delay is the sender's MaxAhead at send
-                // time; the whole event only ever comes from a remote peer, because the local
-                // one is written straight into the outgoing packet and never enters DoList.
-                uint crc = e.U32(0);
+                // The recorder stores what the peer's CRC told it - whether that matched its own hash
+                // of the frame - in place of the CRC; then u16 CommandCount; u8 Delay. Delay is the
+                // sender's MaxAhead at send time; the whole event only ever comes from a remote peer,
+                // because the local one is written straight into the outgoing packet and never enters DoList.
+                string check = (FrameInfoCheck)e.U8(0) switch
+                {
+                    FrameInfoCheck.Match => "in sync",
+                    FrameInfoCheck.Mismatch => "OUT OF SYNC",
+                    _ => "not checked",
+                };
                 ushort commands = e.U16(4);
                 byte delay = e.U8(6);
-                return $"CRC {crc:X8}, cumulative commands {commands}, MaxAhead {delay} frames";
+                return $"{check}, cumulative commands {commands}, MaxAhead {delay} frames";
             }
 
             case EventType.Timing:
