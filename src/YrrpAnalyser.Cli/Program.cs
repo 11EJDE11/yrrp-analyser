@@ -217,7 +217,7 @@ static int Report(string[] args)
         Console.WriteLine($"Chat and beacons ({chat.Count})");
         foreach (var e in chat)
             Console.WriteLine($"  {doc.TimeLabel(e.FrameNumber),8}  {e.TypeName,-12} " +
-                              $"{(e.SenderName.Length > 0 ? e.SenderName : doc.Roster.HouseLabel(e.House)),-16} {e.Text}");
+                              $"{e.SenderWithLabel(e.SenderName.Length > 0 ? e.SenderName : doc.Roster.HouseLabel(e.House)),-24} {e.Text}");
     }
 
     if (args.Contains("--events"))

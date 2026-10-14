@@ -236,7 +236,7 @@ internal sealed partial class MainForm
 
         foreach (var e in chat)
         {
-            string from = e.SenderName.Length > 0 ? e.SenderName : doc.Roster.HouseLabel(e.House);
+            string from = e.SenderWithLabel(e.SenderName.Length > 0 ? e.SenderName : doc.Roster.HouseLabel(e.House));
             string text = e.Type switch
             {
                 SideChannelEventType.BeaconPlace =>

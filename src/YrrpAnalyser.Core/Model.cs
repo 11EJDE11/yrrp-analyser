@@ -61,6 +61,15 @@ public sealed class ReplayHeaderInfo
 public readonly record struct Point2D(int X, int Y);
 public readonly record struct Coord3D(int X, int Y, int Z);
 
+/// <summary>Who a chat message went to, as its sender worked it out (yrpp-spawner src/Misc/InGameChat.h).</summary>
+public enum ChatLabel : byte
+{
+    Unknown = 0,
+    All = 1,
+    Team = 2,
+    Private = 3,
+}
+
 public sealed class SideChannelEvent
 {
     public int FrameNumber { get; init; }
@@ -74,6 +83,19 @@ public sealed class SideChannelEvent
     public string Text { get; init; } = "";
     /// <summary>Chat only: the salt the sender's ChatFingerprint was computed with, when the message carried one.</summary>
     public byte[]? Salt { get; init; }
+    /// <summary>Chat only: who the sender sent it to, when the sender said.</summary>
+    public ChatLabel Label { get; init; }
+    /// <summary>Chat only: the recipients, a bit per house index; 0 when the sender did not say.</summary>
+    public byte Recipients { get; init; }
+
+    /// <summary>The sender's name with the label after it, the way the game shows it: "Name (Team)".</summary>
+    public string SenderWithLabel(string sender) => Label switch
+    {
+        ChatLabel.All => $"{sender} (All)",
+        ChatLabel.Team => $"{sender} (Team)",
+        ChatLabel.Private => $"{sender} (Private)",
+        _ => sender,
+    };
 
     public string TypeName => Enum.IsDefined(Type) ? Type.ToString() : $"Unknown({RawType})";
 }

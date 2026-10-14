@@ -282,14 +282,17 @@ public static class FrameStream
                 return null;
 
             byte[]? salt = null;
+            byte label = 0, recipients = 0;
             if (type == (byte)SideChannelEventType.ChatMessage)
             {
-                if (!c.U8(out byte hasSalt) || hasSalt > 1) return null;
-                if (hasSalt == 1)
+                // Bit 0 a salt, bit 1 the label and recipients.
+                if (!c.U8(out byte flags) || (flags & ~3) != 0) return null;
+                if ((flags & 1) != 0)
                 {
                     if (!c.Bytes(ReplayFormat.ChatSaltBytes, out var s)) return null;
                     salt = s.ToArray();
                 }
+                if ((flags & 2) != 0 && (!c.U8(out label) || !c.U8(out recipients))) return null;
             }
 
             list[i] = new SideChannelEvent
@@ -303,6 +306,8 @@ public static class FrameStream
                 SenderName = name,
                 Text = text,
                 Salt = salt,
+                Label = label <= (byte)ChatLabel.Private ? (ChatLabel)label : ChatLabel.Unknown,
+                Recipients = recipients,
             };
         }
         return list;

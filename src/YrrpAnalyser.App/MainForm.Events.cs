@@ -235,9 +235,9 @@ internal sealed partial class MainForm
                         _ => e.Text,
                     };
 
-                    string player = e.SenderName.Length > 0
+                    string player = e.SenderWithLabel(e.SenderName.Length > 0
                         ? e.SenderName
-                        : doc.Roster.HouseLabel(e.House);
+                        : doc.Roster.HouseLabel(e.House));
 
                     rows.Add(new LogRow
                     {
