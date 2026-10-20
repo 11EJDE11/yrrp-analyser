@@ -16,7 +16,8 @@ if (args.Length == 0)
           yrrp --saves <replay.yrrp> [outdir]    list the embedded saves, or write them out as .SAV
           yrrp --size <replay.yrrp>              where the file's bytes go
           yrrp --verify <replay.yrrp>            check the seals and chat against the file's own contents
-          yrrp --compare-seals <a.yrrp> <b.yrrp> check two copies of one game against each other
+          yrrp --compare-seals <a.yrrp> <b.yrrp> [more...]
+                                                 check copies of one game against each other and name an edited one
         """);
     return 0;
 }
@@ -31,7 +32,7 @@ try
         case "--saves" when args.Length >= 2: return Saves(args[1], args.Length >= 3 ? args[2] : null);
         case "--size" when args.Length >= 2: return Size(args[1]);
         case "--verify" when args.Length >= 2: return Verify(args[1]);
-        case "--compare-seals" when args.Length >= 3: return CompareSeals(args[1], args[2]);
+        case "--compare-seals" when args.Length >= 3: return CompareSeals(args[1..]);
         default: return Report(args);
     }
 }
@@ -77,24 +78,75 @@ static int Verify(string path)
     return result.AllMatch && missing == 0 ? 0 : 1;
 }
 
-static int CompareSeals(string a, string b)
+// Exit code 0 when every copy agrees with the others and with itself, 1 when anything does not.
+static int CompareSeals(string[] paths)
 {
-    var left = ReplayReader.Load(a);
-    var right = ReplayReader.Load(b);
-    var result = Canonical.CompareSeals(left, right);
-    Console.WriteLine($"{left.FileName}\n{right.FileName}");
+    var docs = paths.Select(p => ReplayReader.Load(p)).ToList();
+    bool ok = true;
 
-    if (result.Compared == 0)
+    // Each copy against itself: a stored seal that no longer matches the contents means an edit that
+    // did not redo the chain.
+    Console.WriteLine("Copies");
+    foreach (var doc in docs)
     {
-        Console.WriteLine("  no shared seals to compare");
-        return 1;
+        var v = Canonical.Verify(doc);
+        var player = doc.Roster.ForHouse(Canonical.RecordingHouse(doc));
+        string self = !v.HasSeals ? "no stored seals"
+            : v.AllMatch ? "stored seals match its contents"
+            : $"STORED SEALS DO NOT MATCH ITS CONTENTS (first bad one ends at frame {v.FirstBadSealFrame:N0})";
+        Console.WriteLine($"  {doc.FileName}");
+        Console.WriteLine($"      recorded by {player?.DisplayName ?? "?"}, {doc.EffectiveFrameCount:N0} frames, {self}");
+        ok &= v.AllMatch;
     }
 
-    Console.WriteLine(result.FirstDifferingFrame < 0
-        ? $"  all {result.Compared:N0} shared intervals agree - the same game, unedited, through frame {result.LastMatchingFrame:N0}"
-        : $"  agree through frame {result.LastMatchingFrame:N0}; differ from the interval ending at frame " +
-          $"{result.FirstDifferingFrame:N0} ({left.TimeLabel(result.FirstDifferingFrame)})");
-    return result.FirstDifferingFrame < 0 ? 0 : 1;
+    // The copies against each other, through chains recomputed from what each file holds.
+    Console.WriteLine();
+    Console.WriteLine("Seals recomputed from each file");
+    var copies = Canonical.CompareCopies(docs);
+    if (copies.All(c => c.Compared == 0))
+    {
+        Console.WriteLine("  no full interval reached by two copies - nothing to compare");
+        ok = false;
+    }
+    else if (copies.All(c => c.Status == Canonical.CopyStatus.Agrees))
+    {
+        int through = copies.Max(c => c.LastAgreeingFrame);
+        Console.WriteLine($"  every copy agrees on every interval it shares - the same game, unedited, through frame {through:N0}");
+    }
+    else
+    {
+        ok = false;
+        foreach (var c in copies)
+        {
+            string line = c.Status switch
+            {
+                Canonical.CopyStatus.Agrees => $"agrees with the others through frame {c.LastAgreeingFrame:N0}",
+                Canonical.CopyStatus.Differs => $"DIFFERS from the others from the interval ending at frame {c.FirstDifferingFrame:N0} " +
+                                                $"({c.Doc.TimeLabel(c.FirstDifferingFrame)}) - this copy was edited",
+                _ => $"disagrees from the interval ending at frame {c.FirstDifferingFrame:N0} " +
+                     $"({c.Doc.TimeLabel(c.FirstDifferingFrame)}) with no majority - a copy was edited; " +
+                     "add another copy to find which",
+            };
+            Console.WriteLine($"  {c.Doc.FileName}: {line}");
+        }
+    }
+
+    // Chat: a genuine line belongs in the sender's copy and every recipient's.
+    Console.WriteLine();
+    Console.WriteLine("Chat across copies");
+    var missing = Canonical.CompareChat(docs);
+    int lines = docs.Sum(d => Canonical.Verify(d).Chat.Count(c => c.Status == Canonical.ChatStatus.Verified));
+    if (missing.Count == 0)
+        Console.WriteLine($"  {lines:N0} verified lines across the copies; every copy that should hold a line does");
+    foreach (var m in missing)
+    {
+        var sender = m.Source.Roster.ForHouse(m.Message.House)?.DisplayName ?? m.Message.SenderName;
+        Console.WriteLine($"  ! {m.Copy.FileName} is missing frame {m.Message.FrameNumber:N0} " +
+                          $"{m.Message.SenderWithLabel(sender)}: {m.Message.Text}");
+    }
+    ok &= missing.Count == 0;
+
+    return ok ? 0 : 1;
 }
 
 static (ReplayDocument Doc, EventDescriber Describer) Load(string path, string[] rulesPaths)

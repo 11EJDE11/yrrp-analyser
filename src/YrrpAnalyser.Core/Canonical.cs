@@ -313,29 +313,137 @@ public static class Canonical
     }
 
     /// <summary>
-    /// Compares two recordings' seals interval by interval. Two copies of the same game agree on every
-    /// full interval both of them reached; the first one that differs is where they part.
+    /// Compares two recordings interval by interval, through chains recomputed from each file's
+    /// contents: the seals a file stores can be stale or redone, so on their own they prove nothing.
+    /// Two copies of the same game agree on every full interval both of them reached; the first one
+    /// that differs is where they part.
     /// </summary>
     public static SealComparison CompareSeals(ReplayDocument a, ReplayDocument b)
     {
-        var left = SealsOf(a).Where(s => s.ThroughFrame % ReplayFormat.SealIntervalFrames == ReplayFormat.SealIntervalFrames - 1)
-            .ToDictionary(s => s.ThroughFrame);
+        var left = FullIntervalSeals(a);
         var result = new SealComparison();
-        foreach (var seal in SealsOf(b).OrderBy(s => s.ThroughFrame))
+        foreach (var (through, hash) in FullIntervalSeals(b).OrderBy(s => s.Key))
         {
-            if (!left.TryGetValue(seal.ThroughFrame, out var other)) continue;
+            if (!left.TryGetValue(through, out var other)) continue;
             result.Compared++;
-            if (other.Hash.AsSpan().SequenceEqual(seal.Hash))
+            if (other.AsSpan().SequenceEqual(hash))
             {
-                if (result.FirstDifferingFrame < 0) result.LastMatchingFrame = seal.ThroughFrame;
+                if (result.FirstDifferingFrame < 0) result.LastMatchingFrame = through;
             }
             else if (result.FirstDifferingFrame < 0)
             {
-                result.FirstDifferingFrame = seal.ThroughFrame;
+                result.FirstDifferingFrame = through;
             }
         }
         return result;
     }
+
+    /// <summary>The recomputed seal of every full interval a recording reached, by the interval's last frame.</summary>
+    public static Dictionary<int, byte[]> FullIntervalSeals(ReplayDocument doc) =>
+        ComputeSeals(doc, out _).ToDictionary(s => s.ThroughFrame, s => s.Hash);
+
+    public enum CopyStatus
+    {
+        Agrees,  // matches the other copies on every interval it shares with them
+        Differs, // parts from the copies that agree with each other
+        Split,   // parts from the others with no majority to say which side was edited
+    }
+
+    public sealed class CopyComparison
+    {
+        public required ReplayDocument Doc { get; init; }
+        public CopyStatus Status { get; set; } = CopyStatus.Agrees;
+        /// <summary>The intervals this copy shares with at least one other copy.</summary>
+        public int Compared { get; set; }
+        public int LastAgreeingFrame { get; set; } = -1;
+        /// <summary>The last frame of the first interval where it parts from the others; -1 when it never does.</summary>
+        public int FirstDifferingFrame { get; set; } = -1;
+    }
+
+    /// <summary>
+    /// Compares any number of copies of one game through recomputed chains. On each interval the copies
+    /// that reached it are grouped by hash; a copy outside the largest group differs from the rest from
+    /// there. With no single largest group - two copies that disagree, say - the copies involved are
+    /// split: something was edited, but not which one.
+    /// </summary>
+    public static List<CopyComparison> CompareCopies(IReadOnlyList<ReplayDocument> docs)
+    {
+        var results = docs.Select(d => new CopyComparison { Doc = d }).ToList();
+        var seals = docs.Select(FullIntervalSeals).ToList();
+
+        foreach (int through in seals.SelectMany(s => s.Keys).Distinct().Order())
+        {
+            var present = Enumerable.Range(0, docs.Count).Where(i => seals[i].ContainsKey(through)).ToList();
+            if (present.Count < 2) continue;
+
+            var groups = present.GroupBy(i => Convert.ToHexString(seals[i][through])).OrderByDescending(g => g.Count()).ToList();
+            bool hasMajority = groups.Count == 1 || groups[0].Count() > groups[1].Count();
+            var agreeing = hasMajority ? groups[0].ToHashSet() : [];
+
+            foreach (int i in present)
+            {
+                var r = results[i];
+                r.Compared++;
+                if (r.FirstDifferingFrame >= 0) continue;
+
+                if (agreeing.Contains(i))
+                {
+                    r.LastAgreeingFrame = through;
+                    continue;
+                }
+
+                r.FirstDifferingFrame = through;
+                r.Status = hasMajority ? CopyStatus.Differs : CopyStatus.Split;
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>A chat line one copy should hold, going by the line's recipients, but does not.</summary>
+    public sealed record MissingChat(ReplayDocument Copy, SideChannelEvent Message, ReplayDocument Source);
+
+    /// <summary>
+    /// Checks the copies' chat against each other. Every copy carries every message's fingerprint in
+    /// its lockstep stream, and each line records who the message went to, so a genuine line - one
+    /// whose fingerprint the copy holding it also carries - has to be in the sender's copy and in each
+    /// recipient's, unless that copy had already stopped recording. A copy without it had the line
+    /// removed, or its text changed, which <see cref="Verify"/> reports on its own side.
+    /// </summary>
+    public static List<MissingChat> CompareChat(IReadOnlyList<ReplayDocument> docs)
+    {
+        var lines = new Dictionary<string, (SideChannelEvent Message, ReplayDocument Source, byte Recipients, HashSet<ReplayDocument> Holders)>();
+        foreach (var doc in docs)
+        {
+            foreach (var check in Verify(doc).Chat.Where(c => c.Status == ChatStatus.Verified))
+            {
+                var m = check.Message;
+                string key = $"{m.House}:{Convert.ToHexString(ChatFingerprint(m.Salt!, m.House, m.Text))}";
+                if (!lines.TryGetValue(key, out var line))
+                    line = (m, doc, 0, []);
+                line.Recipients |= m.Recipients;
+                line.Holders.Add(doc);
+                lines[key] = line;
+            }
+        }
+
+        var missing = new List<MissingChat>();
+        foreach (var (message, source, recipients, holders) in lines.Values.OrderBy(l => l.Message.FrameNumber))
+        {
+            foreach (var doc in docs)
+            {
+                if (holders.Contains(doc) || message.FrameNumber > doc.EffectiveFrameCount) continue;
+                int house = RecordingHouse(doc);
+                bool expected = house >= 0 && (house == message.House || (house < 8 && (recipients & (1 << house)) != 0));
+                if (expected)
+                    missing.Add(new MissingChat(doc, message, source));
+            }
+        }
+        return missing;
+    }
+
+    /// <summary>The house of the player whose copy this is; -1 when the roster does not say.</summary>
+    public static int RecordingHouse(ReplayDocument doc) => doc.Roster.RecordingPlayer?.HouseIndex ?? -1;
 
     /// <summary>The seals a recording carries: the statistics section's full list, or what its frame stream holds.</summary>
     public static IEnumerable<SealRecord> SealsOf(ReplayDocument doc) =>

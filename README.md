@@ -13,8 +13,8 @@ dotnet run --project src/YrrpAnalyser.App -- "path\to\replay.yrrp"
 
 .NET 8, no external dependencies. `src/YrrpAnalyser.Core` is the parser and analysis on its own;
 `src/YrrpAnalyser.Cli` is a headless `yrrp` command for batch work (`--scan` a folder, `--compare`
-two recordings, `--export` every CSV/JSON, `--verify` a file's seals and chat, `--compare-seals` two
-copies of one game).
+two recordings, `--export` every CSV/JSON, `--verify` a file's seals and chat, `--compare-seals` any
+number of copies of one game).
 
 ## Overview
 
@@ -108,7 +108,10 @@ on `yr-build`. Earlier recordings are not supported.
 
 `yrrp --verify` checks a file against itself: every seal against the canonical chain recomputed from
 its contents, and every chat line against the fingerprints in its events. `yrrp --compare-seals`
-checks two copies of one game interval by interval.
+takes two or more copies of one game: it verifies each, compares chains recomputed from each file's
+contents interval by interval (stored seals alone prove nothing - they can be stale or redone), names
+the copy that parts from the majority, and checks that every fingerprinted chat line is in the
+sender's copy and each recipient's. Two copies can only show that one was edited; a third says which.
 
 Run the Windows chart and list-view regression checks with:
 
