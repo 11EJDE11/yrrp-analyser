@@ -27,6 +27,7 @@ public static class ReplayFormat
     public const uint MaxFrameBlockBytes = 1u << 20;
     public const int MaxSelectionCount = 4096;
     public const int MaxSelectionTriggersPerFrame = 4096;
+    public const int MaxDroppedHousesPerFrame = 32;
     public const int MaxEventsPerFrame = 128 * 128;
     public const uint MaxEmbeddedFileBytes = 32u * 1024u * 1024u;
 
@@ -151,6 +152,9 @@ public enum FrameBlockTag : uint
     HouseStats = 6,
     MoneyIn = 7,
     Seal = 8,
+    /// <summary>Houses Destroy_Connection flagged to die outside the event stream: dropped while the
+    /// game loaded, or leaving a tournament game.</summary>
+    DroppedHouses = 9,
 }
 
 /// <summary>What the recorder made of a peer's FRAMEINFO CRC, which the file stores in its place.</summary>

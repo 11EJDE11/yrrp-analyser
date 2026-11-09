@@ -18,6 +18,7 @@ public enum FramePart
     HouseStats,
     MoneyIn,
     Seal,
+    DroppedHouses,
     UnknownBlock,
     Event,
 }
@@ -199,6 +200,12 @@ public static class FrameStream
                             block.Slice(4, ReplayFormat.SealHashBytes).ToArray()));
                         break;
 
+                    case FrameBlockTag.DroppedHouses:
+                        part = FramePart.DroppedHouses;
+                        record.DroppedHouses = ReadDroppedHouses(b);
+                        if (record.DroppedHouses is null) problem = "dropped houses";
+                        break;
+
                     default:
                         part = FramePart.UnknownBlock;
                         unknown.Add(tag);
@@ -342,6 +349,19 @@ public static class FrameStream
                 BinaryPrimitives.ReadInt32LittleEndian(m[8..]));
         }
         return payments;
+    }
+
+    private static DroppedHouse[]? ReadDroppedHouses(Cursor c)
+    {
+        if (!c.Varint(out uint count) || count == 0 || count > ReplayFormat.MaxDroppedHousesPerFrame) return null;
+        var drops = new DroppedHouse[count];
+        for (int i = 0; i < count; i++)
+        {
+            if (!c.Varint(out uint house) || !c.Varint(out uint frame)
+                || house > int.MaxValue || frame > int.MaxValue) return null;
+            drops[i] = new DroppedHouse((int)house, (int)frame);
+        }
+        return drops;
     }
 
     /// <summary>Bounds-checked reads over a span of the stream.</summary>

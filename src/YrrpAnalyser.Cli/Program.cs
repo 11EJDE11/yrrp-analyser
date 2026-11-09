@@ -192,12 +192,14 @@ static int Report(string[] args)
 
     Console.WriteLine();
     Console.WriteLine("Players");
+    var drops = DroppedHouse.InDocument(doc);
     foreach (var p in doc.Roster.Players)
     {
         Console.WriteLine($"  house {p.HouseIndex}  slot {p.Slot}  {p.DisplayName,-20} " +
                           $"{p.SideName,-14} colour {p.Color,-3} " +
                           $"{(p.IsHuman ? "human" : "AI   ")} " +
                           $"{(p.IsSpectator ? "spectator " : "")}" +
+                          $"{(drops.TryGetValue(p.HouseIndex, out var drop) ? drop.Describe(doc) + " " : "")}" +
                           $"{(p.IsRecordingPlayer ? "<- recorded this" : "")}");
     }
 

@@ -194,6 +194,31 @@ public sealed record SealRecord(int ThroughFrame, byte[] Hash)
 }
 
 /// <summary>
+/// A house the recorder's Destroy_Connection flagged to die itself, outside the event stream: on frame 0,
+/// a player dropped for not finishing loading; later, a player leaving a tournament game.
+/// </summary>
+public readonly record struct DroppedHouse(int HouseIndex, int FlaggedFrame)
+{
+    public bool WhileLoading => FlaggedFrame == 0;
+
+    /// <summary>The first drop of each house in the recording, by house index.</summary>
+    public static Dictionary<int, DroppedHouse> InDocument(ReplayDocument doc)
+    {
+        var drops = new Dictionary<int, DroppedHouse>();
+        foreach (var frame in doc.Frames)
+        {
+            if (frame.DroppedHouses is null) continue;
+            foreach (var drop in frame.DroppedHouses)
+                drops.TryAdd(drop.HouseIndex, drop);
+        }
+        return drops;
+    }
+
+    public string Describe(ReplayDocument doc) =>
+        WhileLoading ? "dropped while loading" : $"dropped at {doc.TimeLabel(FlaggedFrame)}";
+}
+
+/// <summary>
 /// One frame's record. A block is present only when the frame carried it; the writer omits a block
 /// whose value has not changed since the last written frame.
 /// </summary>
@@ -210,6 +235,7 @@ public sealed class FrameRecord
     public HouseStatsSample[]? HouseStats;
     public MoneyIn[]? MoneyIn;
     public SealRecord[]? Seals;
+    public DroppedHouse[]? DroppedHouses;
     /// <summary>Tags of blocks this build does not know, which were skipped.</summary>
     public uint[]? UnknownBlocks;
 

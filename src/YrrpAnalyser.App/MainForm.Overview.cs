@@ -189,6 +189,7 @@ internal sealed partial class MainForm
         view.Margin = new Padding(0, 0, 0, 4);
         FillWidth(view);
 
+        var drops = DroppedHouse.InDocument(doc);
         foreach (var player in doc.Roster.Players.OrderBy(p => p.HouseIndex))
         {
             var net = network.Series.FirstOrDefault(s => s.HouseIndex == player.HouseIndex);
@@ -198,6 +199,7 @@ internal sealed partial class MainForm
                 ? player.IsSpectator ? "spectator" : "human"
                 : $"AI {player.DifficultyName}".TrimEnd();
             if (player.IsRecordingPlayer) kind += " (recorder)";
+            if (drops.TryGetValue(player.HouseIndex, out var drop)) kind += $", {drop.Describe(doc)}";
 
             var item = new ListViewItem(
             [
