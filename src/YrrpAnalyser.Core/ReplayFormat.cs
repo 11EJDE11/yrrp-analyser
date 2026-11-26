@@ -28,6 +28,8 @@ public static class ReplayFormat
     public const int MaxSelectionCount = 4096;
     public const int MaxSelectionTriggersPerFrame = 4096;
     public const int MaxDroppedHousesPerFrame = 32;
+    /// <summary>SidebarClass::Tabs[4].</summary>
+    public const int SidebarTabCount = 4;
     public const int MaxEventsPerFrame = 128 * 128;
     public const uint MaxEmbeddedFileBytes = 32u * 1024u * 1024u;
 
@@ -155,6 +157,8 @@ public enum FrameBlockTag : uint
     /// <summary>Houses Destroy_Connection flagged to die outside the event stream: dropped while the
     /// game loaded, or leaving a tournament game.</summary>
     DroppedHouses = 9,
+    /// <summary>The sidebar tab the recording player had open, on the frames it changed.</summary>
+    SidebarTab = 10,
 }
 
 /// <summary>What the recorder made of a peer's FRAMEINFO CRC, which the file stores in its place.</summary>

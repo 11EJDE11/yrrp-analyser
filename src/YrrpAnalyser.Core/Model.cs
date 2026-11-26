@@ -236,6 +236,8 @@ public sealed class FrameRecord
     public MoneyIn[]? MoneyIn;
     public SealRecord[]? Seals;
     public DroppedHouse[]? DroppedHouses;
+    /// <summary>The recording player's sidebar tab (0-3), on the frames it changed.</summary>
+    public int? SidebarTab;
     /// <summary>Tags of blocks this build does not know, which were skipped.</summary>
     public uint[]? UnknownBlocks;
 

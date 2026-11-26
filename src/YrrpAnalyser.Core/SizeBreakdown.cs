@@ -144,6 +144,7 @@ public sealed class SizeBreakdown
     private const string MoneyIn = "Income payments";
     private const string Seals = "Canonical seals";
     private const string Dropped = "Players dropped outside the events";
+    private const string SidebarTab = "Sidebar tab changes";
     private const string Unknown = "Blocks this build does not know";
     private const string Unparsed = "Unparsed (after a damaged record)";
 
@@ -170,6 +171,7 @@ public sealed class SizeBreakdown
                 FramePart.MoneyIn => buckets[MoneyIn],
                 FramePart.Seal => buckets[Seals],
                 FramePart.DroppedHouses => buckets[Dropped],
+                FramePart.SidebarTab => buckets[SidebarTab],
                 _ => buckets[Unknown],
             };
             bucket.Add(bytes, count);
@@ -228,7 +230,7 @@ public sealed class SizeBreakdown
             Group("Events: network and timing", network),
         };
         foreach (var name in new[] { HouseStats, MoneyIn, Selection, Camera, Chat, Crc, Headers, Framing, Speed, Triggers,
-                     Seals, Dropped, Unknown, Unparsed })
+                     Seals, Dropped, SidebarTab, Unknown, Unparsed })
         {
             var b = buckets[name];
             if (b.RawBytes > 0) parts.Add(Leaf(b));

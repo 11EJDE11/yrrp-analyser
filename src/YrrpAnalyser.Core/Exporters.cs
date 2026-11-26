@@ -81,7 +81,7 @@ public static class Exporters
     public static void WriteFrameCrcCsv(string path, ReplayDocument doc)
     {
         using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
-        writer.WriteLine("Frame,Time,GameCRC,GameSpeed,Events,SelectionTriggerIDs,Seals");
+        writer.WriteLine("Frame,Time,GameCRC,GameSpeed,SidebarTab,Events,SelectionTriggerIDs,Seals");
         foreach (var f in doc.Frames)
         {
             writer.WriteLine(string.Join(',',
@@ -89,6 +89,7 @@ public static class Exporters
                 Csv(doc.TimeLabel(f.FrameNumber)),
                 f.GameCrc is { } crc ? crc.ToString("X4") : "",
                 f.GameSpeed is { } speed ? speed.ToString() : "",
+                f.SidebarTab is { } tab ? tab.ToString() : "",
                 f.EventCount,
                 Csv(f.SelectionTriggerIds is { } triggers ? string.Join(" ", triggers) : ""),
                 Csv(f.Seals is { } seals ? string.Join(" ", seals.Select(x => $"{x.ThroughFrame}:{x.HashHex}")) : "")));

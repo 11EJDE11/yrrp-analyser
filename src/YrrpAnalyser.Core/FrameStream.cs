@@ -19,6 +19,7 @@ public enum FramePart
     MoneyIn,
     Seal,
     DroppedHouses,
+    SidebarTab,
     UnknownBlock,
     Event,
 }
@@ -204,6 +205,12 @@ public static class FrameStream
                         part = FramePart.DroppedHouses;
                         record.DroppedHouses = ReadDroppedHouses(b);
                         if (record.DroppedHouses is null) problem = "dropped houses";
+                        break;
+
+                    case FrameBlockTag.SidebarTab:
+                        part = FramePart.SidebarTab;
+                        if (!b.U8(out byte tab) || tab >= ReplayFormat.SidebarTabCount) { problem = "sidebar tab"; break; }
+                        record.SidebarTab = tab;
                         break;
 
                     default:
